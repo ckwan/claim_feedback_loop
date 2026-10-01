@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from typing import Literal
 
 from app import models, schemas
 from app.database import get_db
@@ -38,6 +39,7 @@ def list_claims(
     db: Session = Depends(get_db),
     org_id: str = Depends(get_current_org_id),
     status_filter: ClaimStatus | None = Query(default=None, alias="status"),
+    amount_order: Literal["asc", "desc"] | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
@@ -47,7 +49,13 @@ def list_claims(
     stmt = select(models.Claim).where(models.Claim.org_id == org_id)
     if status_filter is not None:
         stmt = stmt.where(models.Claim.status == status_filter)
-    stmt = stmt.order_by(models.Claim.created_at.desc()).offset(offset).limit(limit)
+    if amount_order == "asc":
+        stmt = stmt.order_by(models.Claim.amount.asc(), models.Claim.created_at.desc())
+    elif amount_order == "desc":
+        stmt = stmt.order_by(models.Claim.amount.desc(), models.Claim.created_at.desc())
+    else:
+        stmt = stmt.order_by(models.Claim.created_at.desc())
+    stmt = stmt.offset(offset).limit(limit)
 
     return db.execute(stmt).scalars().all()
 
