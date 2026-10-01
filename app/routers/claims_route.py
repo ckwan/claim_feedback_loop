@@ -7,6 +7,7 @@ from app import models, schemas
 from app.database import get_db
 from app.deps import get_current_org_id
 from app.models import VALID_TRANSITIONS, ClaimStatus
+from app.services.suggestions_service import summarize_claim_history
 
 router = APIRouter(prefix="/claims", tags=["claims"])
 
@@ -68,6 +69,22 @@ def get_claim(
 ):
     claim = _get_claim_or_404(db, claim_id, org_id)
     return claim
+
+
+@router.get("/{claim_id}/history-summary", response_model=schemas.ClaimHistorySummaryOut)
+def claim_history_summary(
+    claim_id: str,
+    db: Session = Depends(get_db),
+    org_id: str = Depends(get_current_org_id),
+):
+    claim = _get_claim_or_404(db, claim_id, org_id)
+    try:
+        return summarize_claim_history(claim)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not generate a valid claim history summary",
+        ) from exc
 
 
 @router.patch("/{claim_id}/status", response_model=schemas.ClaimOut)

@@ -58,6 +58,11 @@ class ClaimStatusUpdate(BaseModel):
     new_status: ClaimStatus
 
 
+class ClaimHistorySummaryOut(BaseModel):
+    summary: str
+    suggested_next_steps: list[str]
+
+
 # ---- Suggestions (the AI half of the feedback loop) ----
 
 

@@ -4,7 +4,7 @@ import os
 
 from pydantic import BaseModel, Field, ValidationError
 
-from app import models
+from app import models, schemas
 
 
 logger = logging.getLogger(__name__)
@@ -122,3 +122,35 @@ def generate_suggestion(
 
 	action, rationale, _ = generate_suggestion_stub(claim)
 	return action, f"LLM fallback used after invalid responses: {rationale}", 0.0
+
+
+def summarize_claim_history(claim: models.Claim) -> schemas.ClaimHistorySummaryOut:
+	"""Summarize claim history and return general, non-diagnostic next steps."""
+	notes = claim.history_notes or "No history notes are available."
+	# Production RAG should chunk and embed notes, then retrieve top-k relevant
+	# chunks instead of sending the entire history field as context.
+	prompt = f"""Summarize the following insurance claim history and suggest general next steps.
+
+Base the response only on the notes. Do not diagnose, prescribe treatment, or
+invent medical facts. Keep recommendations general and advise consulting a
+qualified healthcare professional for medical decisions.
+
+Claim history notes:
+{notes}
+
+Return only valid JSON with exactly these keys:
+{{"summary": string, "suggested_next_steps": [string, ...]}}
+"""
+	for attempt in range(2):
+		try:
+			raw_response = _call_llm(prompt)
+			logger.debug("Claim history summary response (attempt %s): %r", attempt + 1, raw_response)
+			if not raw_response:
+				raise ValueError("LLM returned no response")
+			return schemas.ClaimHistorySummaryOut.model_validate(json.loads(raw_response))
+		except (ValueError, TypeError, json.JSONDecodeError, ValidationError) as exc:
+			logger.warning("Could not parse claim history summary on attempt %s: %s", attempt + 1, exc)
+		except Exception as exc:
+			logger.warning("Claim history summary failed on attempt %s: %s", attempt + 1, exc)
+
+	raise ValueError("LLM could not return a valid claim history summary after two attempts")
