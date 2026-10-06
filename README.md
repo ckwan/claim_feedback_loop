@@ -7,6 +7,21 @@ and that decision is captured for later analysis.
 This is deliberately scoped to run in minutes with **zero setup** (SQLite by
 default).
 
+## Local LLM
+
+The backend uses Ollama on the host machine. Start Ollama, pull the default
+model, then start the application:
+
+```bash
+ollama pull llama3.2
+docker compose up --build
+```
+
+Docker Compose connects to Ollama at `host.docker.internal:11434`. Set
+`OLLAMA_MODEL` to use another installed model or `OLLAMA_BASE_URL` to change
+the Ollama server address. Requests use a 120-second timeout by default,
+configurable with `OLLAMA_TIMEOUT_SECONDS`.
+
 
 
 ## Why I Built This Project
