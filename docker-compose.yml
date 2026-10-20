@@ -19,9 +19,9 @@ services:
     build: ./backend
     environment:
       DATABASE_URL: postgresql://claims:claims@db:5432/claims
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
-      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-120}
+      # Set this to use a real LLM instead of the offline stub; leave unset
+      # and the app falls back to deterministic local behavior.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "8000:8000"
     volumes:

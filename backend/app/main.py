@@ -1,24 +1,26 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from app.database import Base, engine
-from app.routers import claims_route, feedback_route, setup_route, suggestions_route
+from app.routers import claims, feedback, setup, suggestions
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Claims Feedback Loop — Practice API")
 
-app.include_router(setup_route.router)
-app.include_router(claims_route.router)
-app.include_router(suggestions_route.router)
-app.include_router(feedback_route.router)
-
-
+# Local dev only: the Vite frontend runs on a different origin/port. A real
+# deployment would scope this to the actual frontend's origin, not "*".
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For dev, later restrict to frontend domain
+    allow_origins=["http://localhost:5173"],
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
+
+app.include_router(setup.router)
+app.include_router(claims.router)
+app.include_router(suggestions.router)
+app.include_router(feedback.router)
 
 
 @app.get("/health")

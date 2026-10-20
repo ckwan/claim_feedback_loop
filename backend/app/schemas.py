@@ -58,16 +58,13 @@ class ClaimStatusUpdate(BaseModel):
     new_status: ClaimStatus
 
 
-class ClaimHistorySummaryOut(BaseModel):
-    summary: str
-    suggested_next_steps: list[str]
-
-
 # ---- Suggestions (the AI half of the feedback loop) ----
 
 
 class SuggestionOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    # protected_namespaces=() silences Pydantic's warning about the
+    # model_version field name colliding with its reserved "model_" prefix
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
     id: str
     claim_id: str
     suggested_action: str

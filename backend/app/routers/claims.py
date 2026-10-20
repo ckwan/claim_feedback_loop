@@ -1,13 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from typing import Literal
 
 from app import models, schemas
 from app.database import get_db
 from app.deps import get_current_org_id
 from app.models import VALID_TRANSITIONS, ClaimStatus
-from app.services.suggestions_service import summarize_claim_history
+from app.rag.retriever import get_history_summary
 
 router = APIRouter(prefix="/claims", tags=["claims"])
 
@@ -40,7 +39,6 @@ def list_claims(
     db: Session = Depends(get_db),
     org_id: str = Depends(get_current_org_id),
     status_filter: ClaimStatus | None = Query(default=None, alias="status"),
-    amount_order: Literal["asc", "desc"] | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
@@ -50,13 +48,7 @@ def list_claims(
     stmt = select(models.Claim).where(models.Claim.org_id == org_id)
     if status_filter is not None:
         stmt = stmt.where(models.Claim.status == status_filter)
-    if amount_order == "asc":
-        stmt = stmt.order_by(models.Claim.amount.asc(), models.Claim.created_at.desc())
-    elif amount_order == "desc":
-        stmt = stmt.order_by(models.Claim.amount.desc(), models.Claim.created_at.desc())
-    else:
-        stmt = stmt.order_by(models.Claim.created_at.desc())
-    stmt = stmt.offset(offset).limit(limit)
+    stmt = stmt.order_by(models.Claim.created_at.desc()).offset(offset).limit(limit)
 
     return db.execute(stmt).scalars().all()
 
@@ -69,22 +61,6 @@ def get_claim(
 ):
     claim = _get_claim_or_404(db, claim_id, org_id)
     return claim
-
-
-@router.get("/{claim_id}/history-summary", response_model=schemas.ClaimHistorySummaryOut)
-def claim_history_summary(
-    claim_id: str,
-    db: Session = Depends(get_db),
-    org_id: str = Depends(get_current_org_id),
-):
-    claim = _get_claim_or_404(db, claim_id, org_id)
-    try:
-        return summarize_claim_history(claim)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Could not generate a valid claim history summary",
-        ) from exc
 
 
 @router.patch("/{claim_id}/status", response_model=schemas.ClaimOut)
@@ -111,6 +87,23 @@ def update_claim_status(
     db.commit()
     db.refresh(claim)
     return claim
+
+
+@router.get("/{claim_id}/history-summary")
+def claim_history_summary(
+    claim_id: str,
+    db: Session = Depends(get_db),
+    org_id: str = Depends(get_current_org_id),
+):
+    """
+    Lightweight RAG: retrieves similar prior claims (within this org only)
+    and asks the LLM to summarize what they suggest about this claim.
+    Informational only — nothing downstream treats this as a trusted
+    decision input the way suggestion_service.py's output is.
+    """
+    claim = _get_claim_or_404(db, claim_id, org_id)
+    summary = get_history_summary(claim, db)
+    return {"claim_id": claim.id, "summary": summary}
 
 
 def _get_claim_or_404(db: Session, claim_id: str, org_id: str) -> models.Claim:
