@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ClaimDetail } from "@/components/ClaimDetail";
+import { SearchPanel } from "@/components/SearchPanel";
 import { Plus, Gauge } from "lucide-react";
 
 export default function App() {
@@ -22,6 +23,8 @@ export default function App() {
 
   const [claims, setClaims] = useState<Claim[]>([]);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
+  // A claim opened from search may not be on the first page of the list.
+  const [openedClaim, setOpenedClaim] = useState<Claim | null>(null);
   const [overrideRate, setOverrideRate] = useState<number | null>(null);
 
   const [newClaimant, setNewClaimant] = useState("");
@@ -67,7 +70,15 @@ export default function App() {
     return <SetupScreen onSubmit={handleSetup} />;
   }
 
-  const selectedClaim = claims.find((c) => c.id === selectedClaimId) ?? null;
+  const selectedClaim =
+    claims.find((c) => c.id === selectedClaimId) ??
+    (openedClaim && openedClaim.id === selectedClaimId ? openedClaim : null);
+
+  async function openFromSearch(claimId: string) {
+    const claim = await api.getClaim(orgId!, claimId);
+    setOpenedClaim(claim);
+    setSelectedClaimId(claimId);
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -134,6 +145,8 @@ export default function App() {
               </Button>
             </CardContent>
           </Card>
+
+          <SearchPanel orgId={orgId} onOpen={(id) => openFromSearch(id).catch(() => {})} />
 
           <Card>
             <CardHeader>

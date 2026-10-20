@@ -47,7 +47,7 @@ def generate_suggestion(claim: "models.Claim", db: Session) -> tuple[str, str, f
 
     last_error: Exception | None = None
     for attempt in range(MAX_RETRIES + 1):
-        raw = client.complete(prompt)
+        raw = client.complete(prompt, json_mode=True)
         try:
             result = parse_suggestion_response(raw)
             return result.suggested_action, result.rationale, result.confidence

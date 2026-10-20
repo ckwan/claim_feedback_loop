@@ -39,7 +39,8 @@ except ImportError:  # langsmith not installed -> tracing is a no-op
 class LLMClient:
     """Minimal interface: give it a prompt, get back raw text."""
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, json_mode: bool = False) -> str:
+        """json_mode asks the provider to return valid JSON, where it supports that."""
         raise NotImplementedError
 
 
@@ -52,7 +53,14 @@ class StubLLMClient(LLMClient):
     """
 
     @traceable(name="stub_llm_complete", run_type="llm")
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, json_mode: bool = False) -> str:
+        if "Rerank these candidates" in prompt:
+            return _stub_rerank(prompt)
+        if "ReAct investigator" in prompt:
+            return _stub_investigator(prompt)
+        if "Summarize what these sources" in prompt:
+            return _stub_summary(prompt)
+
         # The suggestion-scoring prompt and the RAG history-summary prompt
         # both route through this one offline stub. Branch on a marker
         # unique to the scoring prompt (see prompts.py) so the stub returns
@@ -137,11 +145,11 @@ class OllamaLLMClient(LLMClient):
         self._client = httpx.Client(base_url=self._base_url, timeout=timeout)
 
     @traceable(name="ollama_llm_complete", run_type="llm")
-    def complete(self, prompt: str) -> str:
-        response = self._client.post(
-            "/api/generate",
-            json={"model": self._model, "prompt": prompt, "stream": False},
-        )
+    def complete(self, prompt: str, json_mode: bool = False) -> str:
+        body = {"model": self._model, "prompt": prompt, "stream": False}
+        if json_mode:
+            body["format"] = "json"  # Ollama constrains the output to valid JSON
+        response = self._client.post("/api/generate", json=body)
         response.raise_for_status()
         return response.json()["response"]
 
@@ -159,13 +167,64 @@ class AnthropicLLMClient(LLMClient):
         self._model = model
 
     @traceable(name="anthropic_llm_complete", run_type="llm")
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, json_mode: bool = False) -> str:
         response = self._client.messages.create(
             model=self._model,
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
         return response.content[0].text
+
+
+def _words(text: str) -> set[str]:
+    from app.rag.embeddings import tokenize
+
+    return set(tokenize(text))
+
+
+def _stub_rerank(prompt: str) -> str:
+    """Rank candidates by how many words they share with the query. No model involved."""
+    import re
+
+    query = re.search(r"<query>\n(.*?)\n</query>", prompt, re.S)
+    query_words = _words(query.group(1)) if query else set()
+    scored = []
+    for m in re.finditer(r'<candidate id="(\d+)">\n(.*?)\n</candidate>', prompt, re.S):
+        scored.append((int(m.group(1)), float(len(query_words & _words(m.group(2))))))
+    scored.sort(key=lambda pair: (-pair[1], pair[0]))
+    return json.dumps({"ranking": [{"id": i, "score": min(10.0, s)} for i, s in scored]})
+
+
+def _stub_summary(prompt: str) -> str:
+    import re
+
+    ids = re.findall(r'<source id="(\d+)">', prompt)
+    if not ids:
+        return "No similar prior claims were provided, so there is nothing to summarize."
+    cites = " ".join(f"[{i}]" for i in ids[:2])
+    return (
+        f"Comparable prior claims {cites} were handled with standard review and no unusual "
+        "risk flags were recorded. (Offline stub summary.)"
+    )
+
+
+def _stub_investigator(prompt: str) -> str:
+    """A fixed three step policy so the agent runs and tests with no model."""
+    import re
+
+    done = len(re.findall(r"^Observation \d+:", prompt, re.M))
+    claim_id = re.search(r"Claim under investigation: (\S+)", prompt)
+    if done == 0:
+        return json.dumps({"thought": "Look for similar claims first.", "action": "search_similar_claims",
+                           "args": {"query": "similar claim history"}})
+    if done == 1:
+        return json.dumps({"thought": "Check how adjusters corrected past suggestions.",
+                           "action": "get_override_examples", "args": {"limit": 3}})
+    cited = re.findall(r"claim_id=([\w-]+)", prompt)
+    cited = [c for c in dict.fromkeys(cited) if not claim_id or c != claim_id.group(1)][:2]
+    return json.dumps({"thought": "I have enough to answer.", "action": "finish",
+                       "args": {"answer": "Reviewed similar claims and past adjuster corrections. "
+                                          "(Offline stub answer.)", "cited_claim_ids": cited}})
 
 
 def _extract_amount(prompt: str) -> float | None:

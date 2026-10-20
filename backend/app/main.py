@@ -1,10 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.database import Base, engine
-from app.routers import claims, feedback, setup, suggestions
+from app.database import create_dev_schema, is_postgres
+from app.routers import claims, feedback, investigate, search, setup, suggestions
 
-Base.metadata.create_all(bind=engine)
+# On Postgres the schema comes from `alembic upgrade head` (see migrations/).
+# SQLite is for quick local runs and tests, so it is created directly.
+if not is_postgres():
+    create_dev_schema()
 
 app = FastAPI(title="Claims Feedback Loop — Practice API")
 
@@ -18,9 +21,11 @@ app.add_middleware(
 )
 
 app.include_router(setup.router)
+app.include_router(search.router)  # before claims: /claims/search must not match /claims/{id}
 app.include_router(claims.router)
 app.include_router(suggestions.router)
 app.include_router(feedback.router)
+app.include_router(investigate.router)
 
 
 @app.get("/health")

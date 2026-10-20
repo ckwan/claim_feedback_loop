@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api, type Claim, type ClaimStatus, type Suggestion } from "@/lib/api";
+import { api, type Claim, type ClaimStatus, type HistorySummary, type Suggestion } from "@/lib/api";
+import { InvestigationPanel } from "@/components/InvestigationPanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -41,7 +42,7 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
-  const [summary, setSummary] = useState<string | null>(null);
+  const [summary, setSummary] = useState<HistorySummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -100,7 +101,7 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
     setError(null);
     try {
       const res = await api.getHistorySummary(orgId, claim.id);
-      setSummary(res.summary);
+      setSummary(res);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -260,8 +261,27 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
           View similar-claims summary (RAG)
         </Button>
         {summary && (
-          <p className="rounded-md bg-muted/40 p-3 text-sm text-muted-foreground">{summary}</p>
+          <div className="space-y-2 rounded-md bg-muted/40 p-3 text-sm">
+            <p className="text-muted-foreground">{summary.summary}</p>
+            {summary.sources.length > 0 && (
+              <>
+                {!summary.grounded && (
+                  <p className="text-xs text-amber-700">
+                    This summary cites no source, so treat it with caution.
+                  </p>
+                )}
+                <ol className="space-y-1 border-t pt-2 text-xs text-muted-foreground">
+                  {summary.sources.map((src, i) => (
+                    <li key={src.claim_id}>
+                      <span className="font-medium">[{i + 1}]</span> {src.claimant_name}: {src.snippet}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+          </div>
         )}
+        <InvestigationPanel key={claim.id} orgId={orgId} claimId={claim.id} />
       </CardFooter>
     </Card>
   );

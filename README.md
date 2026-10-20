@@ -98,6 +98,41 @@ few-shot context on every subsequent suggestion for that org.
   mounts, hot reload) — a real deployment would use a multi-stage build,
   serve the frontend as static assets behind nginx, and drop `--reload`.
 
+## Search, RAG and the ReAct investigator
+
+Needs Postgres with pgvector (`docker compose up` gives you both). On SQLite the app still runs, but search returns a 503 explaining why.
+
+| What | Where |
+|---|---|
+| Chunk, embed and index claims (idempotent by content hash) | `app/rag/chunking.py`, `indexing.py` |
+| pgvector HNSW + full text GIN, tenant filter inside the SQL | `app/rag/search.py`, migration `0002` |
+| Hybrid search with Reciprocal Rank Fusion | `HYBRID_SQL` in `search.py` |
+| Optional LLM reranking, validated, falls back to original order | `app/rag/rerank.py` |
+| History summary that must cite sources, bad citations removed | `app/rag/retriever.py` |
+| ReAct claim investigator (LangGraph, read only tools, step cap) | `app/agents/investigator.py` |
+| Prompt injection handling for claim text | `app/safety.py` |
+| Retrieval eval: recall@3, recall@5, MRR | `scripts/run_retrieval_eval.py` |
+
+Endpoints: `GET /claims/search?q=&mode=hybrid|vector|keyword&rerank=`, `POST /claims/reindex`, `POST /claims/{id}/investigate`.
+
+Run the app with real embeddings:
+
+```bash
+ollama pull nomic-embed-text
+EMBEDDING_PROVIDER=ollama docker compose up --build
+```
+
+If you had the old alpine database volume, run `docker compose down -v` once, because the image changed.
+
+Tests: `pytest` (158 tests). The Postgres tests create a `claims_test` database and skip if Postgres is not reachable. Set `TEST_DATABASE_URL` to change it.
+
+Honest limits:
+- The default `stub` embedder hashes words, so it matches wording, not meaning. Real quality needs Ollama.
+- I have not yet recorded real retrieval numbers. Run the eval with Ollama and put the table here.
+- The eval set is 30 synthetic claims and 20 queries. It shows the method differences, not production accuracy.
+
+More on the Postgres side: `docs/pgvector-notes.md`.
+
 ## Quickstart
 
 ### Option A: Docker (easiest — runs backend + frontend + Postgres together)

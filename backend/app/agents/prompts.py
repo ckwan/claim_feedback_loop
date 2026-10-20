@@ -12,13 +12,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models
+from app.safety import UNTRUSTED_NOTICE, clean_text, neutralize_tags, wrap_untrusted
 
 MAX_FEW_SHOT_EXAMPLES = 3
 
 SYSTEM_INSTRUCTIONS = """You are assisting an insurance adjuster by suggesting the next action \
 on a claim. Respond with a single JSON object and nothing else, with exactly \
 these keys: "suggested_action" (one of: under_review, approved, denied), \
-"rationale" (one sentence), and "confidence" (a float between 0 and 1)."""
+"rationale" (one sentence), and "confidence" (a float between 0 and 1). """ + UNTRUSTED_NOTICE
 
 
 def build_suggestion_prompt(claim: "models.Claim", db: Session) -> str:
@@ -58,15 +59,20 @@ def _recent_overrides_for_org(
     return list(db.execute(stmt).all())
 
 
+def _safe(text: str | None) -> str:
+    # History notes and override reasons are typed by people. See app/safety.py.
+    return neutralize_tags(clean_text(text, 400)) or "none"
+
+
 def _format_few_shot_block(
     examples: list[tuple["models.Claim", "models.Suggestion", "models.Feedback"]]
 ) -> str:
     lines = ["Recent adjuster corrections on similar claims (learn from these):"]
     for claim, suggestion, feedback in examples:
         lines.append(
-            f'- Claim amount ${claim.amount:.0f}, history: "{claim.history_notes or "none"}". '
+            f'- Claim amount ${claim.amount:.0f}, history: "{_safe(claim.history_notes)}". '
             f'AI suggested "{suggestion.suggested_action}", but the adjuster overrode it to '
-            f'"{feedback.final_action}" because: {feedback.override_reason}.'
+            f'"{feedback.final_action}" because: {_safe(feedback.override_reason)}.'
         )
     return "\n".join(lines)
 
@@ -76,5 +82,5 @@ def _format_claim_block(claim: "models.Claim") -> str:
         "Now score this claim:\n"
         f"Amount requested: {claim.amount}\n"
         f"Current status: {claim.status.value}\n"
-        f'History notes: {claim.history_notes or "none"}'
+        "History notes:\n" + wrap_untrusted("history", claim.history_notes or "none")
     )
