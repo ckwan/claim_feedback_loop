@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import get_db
 from app.deps import get_current_org_id
+from app.models import VALID_TRANSITIONS, ClaimStatus
 
 router = APIRouter(tags=["feedback"])
 
@@ -32,6 +33,36 @@ def record_feedback(
             detail="override_reason is required when action_taken is 'overridden'",
         )
 
+    claim = suggestion.claim
+
+    # This is the step that was previously missing entirely: recording a
+    # decision (accept or override) used to only ever write a Feedback row
+    # and never actually moved the claim's own status. A claim would sit at
+    # "open" forever no matter what an adjuster clicked. final_action is the
+    # adjuster's decided next status for the claim, so it must be applied
+    # here, through the same VALID_TRANSITIONS check PATCH /claims/{id}/status
+    # uses — never set it directly without validating the transition first,
+    # or a bad override could silently corrupt the state machine.
+    try:
+        new_status = ClaimStatus(payload.final_action)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"'{payload.final_action}' is not a valid claim status.",
+        )
+
+    allowed = VALID_TRANSITIONS[claim.status]
+    if new_status not in allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot apply final_action '{new_status.value}': claim is "
+                f"'{claim.status.value}', and only "
+                f"{sorted(s.value for s in allowed) or 'no transitions (terminal state)'} "
+                "are valid from there."
+            ),
+        )
+
     feedback = models.Feedback(
         suggestion_id=suggestion_id,
         adjuster_id=payload.adjuster_id,
@@ -40,6 +71,7 @@ def record_feedback(
         override_reason=payload.override_reason,
     )
     db.add(feedback)
+    claim.status = new_status
     db.commit()
     db.refresh(feedback)
     return feedback

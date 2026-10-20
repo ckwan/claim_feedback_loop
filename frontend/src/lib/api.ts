@@ -45,6 +45,53 @@ export interface Adjuster {
   email: string;
 }
 
+export type SearchMode = "hybrid" | "vector" | "keyword";
+
+export interface SearchHit {
+  claim_id: string;
+  claimant_name: string;
+  amount: number;
+  status: ClaimStatus;
+  snippet: string;
+  score: number;
+  // Rank in each list before they were merged. null means that method did not find it.
+  vector_rank: number | null;
+  keyword_rank: number | null;
+  rerank_score: number | null;
+}
+
+export interface SearchResponse {
+  query: string;
+  mode: SearchMode;
+  reranked: boolean;
+  embedding_model: string;
+  results: SearchHit[];
+  timings_ms: Record<string, number>;
+}
+
+export interface HistorySummary {
+  claim_id: string;
+  summary: string;
+  sources: SearchHit[];
+  grounded: boolean;
+}
+
+export interface InvestigationStep {
+  step: number;
+  thought: string;
+  action: string;
+  args: Record<string, unknown>;
+  observation: string;
+}
+
+export interface Investigation {
+  claim_id: string;
+  answer: string;
+  cited_claim_ids: string[];
+  steps: InvestigationStep[];
+  stopped_because: "finished" | "step_limit" | "repeated_action" | "error";
+}
+
 async function request<T>(
   orgId: string,
   path: string,
@@ -115,11 +162,31 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  getHistorySummary: (orgId: string, claimId: string) =>
-    request<{ claim_id: string; summary: string }>(
+  getHistorySummary: (orgId: string, claimId: string, rerank = false) =>
+    request<HistorySummary>(
       orgId,
-      `/claims/${claimId}/history-summary`
+      `/claims/${claimId}/history-summary${rerank ? "?rerank=true" : ""}`
     ),
+
+  searchClaims: (
+    orgId: string,
+    q: string,
+    opts: { mode?: SearchMode; rerank?: boolean; topK?: number } = {}
+  ) => {
+    const params = new URLSearchParams({
+      q,
+      mode: opts.mode ?? "hybrid",
+      top_k: String(opts.topK ?? 5),
+      rerank: String(opts.rerank ?? false),
+    });
+    return request<SearchResponse>(orgId, `/claims/search?${params}`);
+  },
+
+  investigateClaim: (orgId: string, claimId: string, question?: string) =>
+    request<Investigation>(orgId, `/claims/${claimId}/investigate`, {
+      method: "POST",
+      body: JSON.stringify({ question: question || null }),
+    }),
 
   getOverrideRate: (orgId: string) =>
     request<{ total: number; overridden: number; override_rate: number }>(

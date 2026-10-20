@@ -1,0 +1,7 @@
+venv/
+venv_backend/
+__pycache__/
+*.pyc
+claims.db
+.env
+.pytest_cache/

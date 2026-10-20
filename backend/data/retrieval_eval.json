@@ -1,0 +1,302 @@
+{
+  "note": "Synthetic. Every claim here is invented. Queries are split into paraphrase (few shared words, meaning search should help) and exact (a literal term, keyword search should help).",
+  "claims": [
+    {
+      "id": "c01",
+      "text": "Burst pipe flooded the kitchen and ruined the lower cabinets. Plumber invoice attached."
+    },
+    {
+      "id": "c02",
+      "text": "Washing machine hose failed and soaked the laundry room floor while we were out."
+    },
+    {
+      "id": "c03",
+      "text": "Roof leaked during the storm and stained the bedroom ceiling."
+    },
+    {
+      "id": "c04",
+      "text": "Basement took on water after the sump pump stopped working overnight."
+    },
+    {
+      "id": "c05",
+      "text": "Rear ended at a red light. Bumper and trunk need repair, other driver admitted fault."
+    },
+    {
+      "id": "c06",
+      "text": "Side swipe in the parking lot left a long dent along the driver door."
+    },
+    {
+      "id": "c07",
+      "text": "Struck a deer on the highway at dusk. Front end and radiator damaged."
+    },
+    {
+      "id": "c08",
+      "text": "Laptop and camera stolen from a parked car. Police report filed the same day."
+    },
+    {
+      "id": "c09",
+      "text": "Bicycle taken from the garage overnight. The lock had been cut."
+    },
+    {
+      "id": "c10",
+      "text": "Burglary while the family was on vacation. Jewelry and a television missing."
+    },
+    {
+      "id": "c11",
+      "text": "Grease fire on the stove spread to the cabinets. Smoke damage throughout the house."
+    },
+    {
+      "id": "c12",
+      "text": "Electrical short started a fire in the garage. Fire department responded."
+    },
+    {
+      "id": "c13",
+      "text": "Slipped on icy steps and fractured a wrist. Physical therapy twice a week."
+    },
+    {
+      "id": "c14",
+      "text": "Strained back lifting boxes at work. Chiropractor visits and light duty."
+    },
+    {
+      "id": "c15",
+      "text": "Whiplash after a car accident. Neck pain treated with massage and exercises."
+    },
+    {
+      "id": "c16",
+      "text": "Application said the home was owner occupied but the inspection found it was rented out."
+    },
+    {
+      "id": "c17",
+      "text": "Earlier rust and body damage were not disclosed on the application. Photos show it predates the policy."
+    },
+    {
+      "id": "c18",
+      "text": "Claim was reported four months after the storm. No photos were taken at the time."
+    },
+    {
+      "id": "c19",
+      "text": "Receipts for the stolen items were requested three times and never provided."
+    },
+    {
+      "id": "c20",
+      "text": "High winds blew down the fence and a tree fell on the garden shed."
+    },
+    {
+      "id": "c21",
+      "text": "Dishwasher overflowed and warped the hardwood floor in the dining area."
+    },
+    {
+      "id": "c22",
+      "text": "Hail dented the hood and roof of the parked sedan."
+    },
+    {
+      "id": "c23",
+      "text": "Wallet and phone snatched from a purse at the train station."
+    },
+    {
+      "id": "c24",
+      "text": "Candle left burning ignited curtains in the living room. Two rooms scorched."
+    },
+    {
+      "id": "c25",
+      "text": "Knee surgery after a skiing fall. Orthopedic follow up and crutches for six weeks."
+    },
+    {
+      "id": "c26",
+      "text": "Claimant gave conflicting dates of loss in two separate statements."
+    },
+    {
+      "id": "c27",
+      "text": "Repair estimate from the body shop was double the usual cost for similar damage."
+    },
+    {
+      "id": "c28",
+      "text": "Frozen pipe split in the attic and dripped through the hallway ceiling."
+    },
+    {
+      "id": "c29",
+      "text": "Rented moving truck backed into a gate and bent the frame."
+    },
+    {
+      "id": "c30",
+      "text": "Tenant moved out leaving mold behind the bathroom wall. Remediation quote attached."
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "text": "plumbing failure causing flooding",
+      "kind": "paraphrase",
+      "relevant": [
+        "c01",
+        "c02",
+        "c04",
+        "c21",
+        "c28"
+      ]
+    },
+    {
+      "id": "q02",
+      "text": "vehicle damaged in a crash",
+      "kind": "paraphrase",
+      "relevant": [
+        "c05",
+        "c06",
+        "c07",
+        "c29"
+      ]
+    },
+    {
+      "id": "q03",
+      "text": "someone broke in and took belongings",
+      "kind": "paraphrase",
+      "relevant": [
+        "c08",
+        "c09",
+        "c10",
+        "c23"
+      ]
+    },
+    {
+      "id": "q04",
+      "text": "blaze in the home",
+      "kind": "paraphrase",
+      "relevant": [
+        "c11",
+        "c12",
+        "c24"
+      ]
+    },
+    {
+      "id": "q05",
+      "text": "hurt arm after a fall on ice",
+      "kind": "paraphrase",
+      "relevant": [
+        "c13"
+      ]
+    },
+    {
+      "id": "q06",
+      "text": "stiff neck following a collision",
+      "kind": "paraphrase",
+      "relevant": [
+        "c15"
+      ]
+    },
+    {
+      "id": "q07",
+      "text": "customer lied on the policy form",
+      "kind": "paraphrase",
+      "relevant": [
+        "c16",
+        "c17"
+      ]
+    },
+    {
+      "id": "q08",
+      "text": "filed too long after the event",
+      "kind": "paraphrase",
+      "relevant": [
+        "c18"
+      ]
+    },
+    {
+      "id": "q09",
+      "text": "no proof of purchase supplied",
+      "kind": "paraphrase",
+      "relevant": [
+        "c19"
+      ]
+    },
+    {
+      "id": "q10",
+      "text": "severe weather knocked down outbuildings",
+      "kind": "paraphrase",
+      "relevant": [
+        "c20",
+        "c03",
+        "c22"
+      ]
+    },
+    {
+      "id": "q11",
+      "text": "inconsistent statements about when it happened",
+      "kind": "paraphrase",
+      "relevant": [
+        "c26"
+      ]
+    },
+    {
+      "id": "q12",
+      "text": "overpriced repair quote",
+      "kind": "paraphrase",
+      "relevant": [
+        "c27"
+      ]
+    },
+    {
+      "id": "q13",
+      "text": "sump pump",
+      "kind": "exact",
+      "relevant": [
+        "c04"
+      ]
+    },
+    {
+      "id": "q14",
+      "text": "physical therapy",
+      "kind": "exact",
+      "relevant": [
+        "c13"
+      ]
+    },
+    {
+      "id": "q15",
+      "text": "chiropractor",
+      "kind": "exact",
+      "relevant": [
+        "c14"
+      ]
+    },
+    {
+      "id": "q16",
+      "text": "police report",
+      "kind": "exact",
+      "relevant": [
+        "c08"
+      ]
+    },
+    {
+      "id": "q17",
+      "text": "owner occupied",
+      "kind": "exact",
+      "relevant": [
+        "c16"
+      ]
+    },
+    {
+      "id": "q18",
+      "text": "Plumber invoice",
+      "kind": "exact",
+      "relevant": [
+        "c01"
+      ]
+    },
+    {
+      "id": "q19",
+      "text": "smoke damage",
+      "kind": "exact",
+      "relevant": [
+        "c11"
+      ]
+    },
+    {
+      "id": "q20",
+      "text": "hardwood floor",
+      "kind": "exact",
+      "relevant": [
+        "c21"
+      ]
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api, type Claim, type Suggestion } from "@/lib/api";
+import { api, type Claim, type ClaimStatus, type HistorySummary, type Suggestion } from "@/lib/api";
+import { InvestigationPanel } from "@/components/InvestigationPanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,11 +19,30 @@ interface Props {
 
 type Phase = "idle" | "loading-suggestion" | "awaiting-decision" | "overriding" | "submitting" | "done";
 
+// Mirrors VALID_TRANSITIONS in backend/app/models.py. Duplicated here (not
+// fetched from the API) so the UI can disable/hide illegal choices before
+// a request round-trip — the backend is still the source of truth and
+// re-validates on every POST /suggestions/{id}/feedback, so a mismatch
+// here is a UX annoyance, not a correctness bug.
+const VALID_TRANSITIONS: Record<ClaimStatus, ClaimStatus[]> = {
+  open: ["under_review"],
+  under_review: ["approved", "denied"],
+  approved: [],
+  denied: [],
+};
+
+const STATUS_LABEL: Record<ClaimStatus, string> = {
+  open: "Send to review",
+  under_review: "Under review",
+  approved: "Approve",
+  denied: "Deny",
+};
+
 export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
-  const [summary, setSummary] = useState<string | null>(null);
+  const [summary, setSummary] = useState<HistorySummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,7 +101,7 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
     setError(null);
     try {
       const res = await api.getHistorySummary(orgId, claim.id);
-      setSummary(res.summary);
+      setSummary(res);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -137,16 +157,25 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
           </div>
         )}
 
-        {phase === "awaiting-decision" && adjusterId && (
+        {phase === "awaiting-decision" && adjusterId && suggestion?.suggested_action === "no_action" && (
+          <p className="text-sm text-muted-foreground">
+            This claim is already {claim.status} — there's nothing left to
+            accept or override.
+          </p>
+        )}
+
+        {phase === "awaiting-decision" && adjusterId && suggestion?.suggested_action !== "no_action" && (
           <div className="flex flex-wrap gap-2">
             <Button onClick={handleAccept} variant="default" className="gap-2">
               <ThumbsUp className="h-4 w-4" />
               Accept suggestion
             </Button>
-            <Button onClick={() => setPhase("overriding")} variant="outline" className="gap-2">
-              <ThumbsDown className="h-4 w-4" />
-              Override
-            </Button>
+            {VALID_TRANSITIONS[claim.status].filter((s) => s !== suggestion?.suggested_action).length > 0 && (
+              <Button onClick={() => setPhase("overriding")} variant="outline" className="gap-2">
+                <ThumbsDown className="h-4 w-4" />
+                Override
+              </Button>
+            )}
           </div>
         )}
 
@@ -174,26 +203,30 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!overrideReason.trim()}
-                onClick={() => handleOverrideSubmit("under_review")}
-              >
-                Send to review instead
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!overrideReason.trim()}
-                onClick={() => handleOverrideSubmit("denied")}
-              >
-                Deny instead
-              </Button>
+              {VALID_TRANSITIONS[claim.status]
+                .filter((status) => status !== suggestion?.suggested_action)
+                .map((status) => (
+                  <Button
+                    key={status}
+                    size="sm"
+                    variant="secondary"
+                    disabled={!overrideReason.trim()}
+                    onClick={() => handleOverrideSubmit(status)}
+                  >
+                    {STATUS_LABEL[status]} instead
+                  </Button>
+                ))}
               <Button size="sm" variant="ghost" onClick={() => setPhase("awaiting-decision")}>
                 Cancel
               </Button>
             </div>
+            {VALID_TRANSITIONS[claim.status].filter((s) => s !== suggestion?.suggested_action).length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                No alternative action is available from this claim's current status
+                ({claim.status}) — the only valid next step is what the AI already
+                suggested.
+              </p>
+            )}
           </div>
         )}
 
@@ -228,8 +261,27 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
           View similar-claims summary (RAG)
         </Button>
         {summary && (
-          <p className="rounded-md bg-muted/40 p-3 text-sm text-muted-foreground">{summary}</p>
+          <div className="space-y-2 rounded-md bg-muted/40 p-3 text-sm">
+            <p className="text-muted-foreground">{summary.summary}</p>
+            {summary.sources.length > 0 && (
+              <>
+                {!summary.grounded && (
+                  <p className="text-xs text-amber-700">
+                    This summary cites no source, so treat it with caution.
+                  </p>
+                )}
+                <ol className="space-y-1 border-t pt-2 text-xs text-muted-foreground">
+                  {summary.sources.map((src, i) => (
+                    <li key={src.claim_id}>
+                      <span className="font-medium">[{i + 1}]</span> {src.claimant_name}: {src.snippet}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+          </div>
         )}
+        <InvestigationPanel key={claim.id} orgId={orgId} claimId={claim.id} />
       </CardFooter>
     </Card>
   );

@@ -57,3 +57,17 @@ def _strip_markdown_fences(raw: str) -> str:
         if text.startswith("json"):
             text = text[len("json") :]
     return text.strip()
+
+
+def parse_model(raw: str, model_cls):
+    """Validate raw model text against any Pydantic model. Raises LLMResponseError."""
+    try:
+        data = json.loads(_strip_markdown_fences(raw))
+    except json.JSONDecodeError as exc:
+        raise LLMResponseError(f"Non-JSON LLM response: {exc}") from exc
+    try:
+        return model_cls.model_validate(data)
+    except ValidationError as exc:
+        # Locations and error types only. The input may hold claim text.
+        problems = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['type']}" for e in exc.errors())
+        raise LLMResponseError(f"LLM response failed validation: {problems}") from exc

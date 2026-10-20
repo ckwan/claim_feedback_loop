@@ -1,14 +1,20 @@
+import logging
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from typing import Literal
 
 from app import models, schemas
 from app.database import get_db
+from app.database import session_is_postgres
 from app.deps import get_current_org_id
 from app.models import VALID_TRANSITIONS, ClaimStatus
-from app.services.suggestions_service import summarize_claim_history
+from app.rag.embeddings import get_embedder
+from app.rag.indexing import try_index_claim
+from app.rag.retriever import get_history_summary, summarize_history
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/claims", tags=["claims"])
 
 
@@ -32,6 +38,10 @@ def create_claim(
     db.add(claim)
     db.commit()
     db.refresh(claim)
+    if session_is_postgres(db):
+        # Make the notes searchable. A failure here (say Ollama is not running) never
+        # fails the claim. POST /claims/reindex catches up later.
+        try_index_claim(db, claim, get_embedder())
     return claim
 
 
@@ -50,6 +60,8 @@ def list_claims(
     stmt = select(models.Claim).where(models.Claim.org_id == org_id)
     if status_filter is not None:
         stmt = stmt.where(models.Claim.status == status_filter)
+    # Sorting happens before the offset and limit, so a page is a slice of the sorted
+    # result and not a sorted slice of the page.
     if amount_order == "asc":
         stmt = stmt.order_by(models.Claim.amount.asc(), models.Claim.created_at.desc())
     elif amount_order == "desc":
@@ -69,22 +81,6 @@ def get_claim(
 ):
     claim = _get_claim_or_404(db, claim_id, org_id)
     return claim
-
-
-@router.get("/{claim_id}/history-summary", response_model=schemas.ClaimHistorySummaryOut)
-def claim_history_summary(
-    claim_id: str,
-    db: Session = Depends(get_db),
-    org_id: str = Depends(get_current_org_id),
-):
-    claim = _get_claim_or_404(db, claim_id, org_id)
-    try:
-        return summarize_claim_history(claim)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Could not generate a valid claim history summary",
-        ) from exc
 
 
 @router.patch("/{claim_id}/status", response_model=schemas.ClaimOut)
@@ -111,6 +107,35 @@ def update_claim_status(
     db.commit()
     db.refresh(claim)
     return claim
+
+
+@router.get("/{claim_id}/history-summary", response_model=schemas.HistorySummaryOut)
+def claim_history_summary(
+    claim_id: str,
+    rerank: bool = False,
+    db: Session = Depends(get_db),
+    org_id: str = Depends(get_current_org_id),
+):
+    """
+    RAG: finds similar prior claims in this org (hybrid search, optionally reranked),
+    and asks the LLM to summarize them with citations. Citations that point at no real
+    source are removed, and `grounded` says whether any valid citation is left.
+    Informational only: nothing downstream treats this as a decision input.
+    """
+    claim = _get_claim_or_404(db, claim_id, org_id)
+    if not session_is_postgres(db):
+        return schemas.HistorySummaryOut(claim_id=claim.id, summary=get_history_summary(claim, db))
+    try:
+        result = summarize_history(db, claim, rerank=rerank)
+    except Exception as exc:  # embedding service down, etc.
+        logger.warning("History summary failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Search is unavailable right now") from exc
+    return schemas.HistorySummaryOut(
+        claim_id=claim.id,
+        summary=result.summary,
+        sources=[schemas.SearchHitOut(**{**s.__dict__}) for s in result.sources],
+        grounded=result.grounded,
+    )
 
 
 def _get_claim_or_404(db: Session, claim_id: str, org_id: str) -> models.Claim:
