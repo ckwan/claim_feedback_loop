@@ -133,53 +133,6 @@ Honest limits:
 
 More on the Postgres side: `docs/pgvector-notes.md`.
 
-## Quickstart
-
-### Option A: Docker (easiest — runs backend + frontend + Postgres together)
-
-```bash
-docker compose up --build
-```
-
-- Backend: http://localhost:8000 (Swagger UI at `/docs`)
-- Frontend: http://localhost:5173
-- Postgres: localhost:5432 (user/pass/db all `claims`)
-
-Both `backend/` and `frontend/` are bind-mounted into their containers, so
-edits on your host hot-reload (`uvicorn --reload` / Vite dev server) without
-rebuilding the image — rebuild (`docker compose up --build`) only when you
-change `requirements.txt` or `package.json`. To use a real LLM instead of
-the offline stub, export `ANTHROPIC_API_KEY` in your shell before running
-`docker compose up` — `docker-compose.yml` passes it through automatically.
-
-`docker compose down` stops everything; add `-v` to also drop the Postgres
-volume if you want a clean database next time.
-
-### Option B: Run backend and frontend directly (no Docker)
-
-Backend:
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env              # defaults to local SQLite, no DB needed
-uvicorn app.main:app --reload
-```
-
-Then open http://localhost:8000/docs for interactive Swagger UI, or hit it
-with curl — see the walkthrough below.
-
-Frontend (in a second terminal):
-```bash
-cd frontend
-npm install
-cp .env.example .env              # points at the backend above, localhost:8000
-npm run dev                        # http://localhost:5173
-```
-
-The backend's FastAPI CORS middleware (`backend/app/main.py`) is already
-configured to allow `http://localhost:5173`.
 
 ## Folder structure
 
