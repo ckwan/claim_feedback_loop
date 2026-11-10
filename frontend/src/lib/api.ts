@@ -92,6 +92,13 @@ export interface Investigation {
   stopped_because: "finished" | "step_limit" | "repeated_action" | "error";
 }
 
+export interface ClaimStats {
+  by_status: Record<ClaimStatus, number>;
+  total: number;
+  decisions: { accepted: number; overridden: number; override_rate: number | null };
+  approval_rate: number | null;
+}
+
 async function request<T>(
   orgId: string,
   path: string,
@@ -144,6 +151,12 @@ export const api = {
   getClaim: (orgId: string, claimId: string) =>
     request<Claim>(orgId, `/claims/${claimId}`),
 
+  updateClaimStatus: (orgId: string, claimId: string, newStatus: ClaimStatus) =>
+    request<Claim>(orgId, `/claims/${claimId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ new_status: newStatus }),
+    }),
+
   requestSuggestion: (orgId: string, claimId: string) =>
     request<Suggestion>(orgId, `/claims/${claimId}/suggest`, { method: "POST" }),
 
@@ -187,6 +200,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question: question || null }),
     }),
+
+  getStats: (orgId: string) => request<ClaimStats>(orgId, "/claims/stats"),
 
   getOverrideRate: (orgId: string) =>
     request<{ total: number; overridden: number; override_rate: number }>(

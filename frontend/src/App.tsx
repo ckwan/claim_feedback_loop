@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Claim } from "@/lib/api";
+import { api, type Claim, type ClaimStats } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ClaimDetail } from "@/components/ClaimDetail";
 import { SearchPanel } from "@/components/SearchPanel";
+import { StatsCards } from "@/components/StatsCards";
 import { Plus, Gauge } from "lucide-react";
 
 export default function App() {
@@ -26,6 +27,7 @@ export default function App() {
   // A claim opened from search may not be on the first page of the list.
   const [openedClaim, setOpenedClaim] = useState<Claim | null>(null);
   const [overrideRate, setOverrideRate] = useState<number | null>(null);
+  const [stats, setStats] = useState<ClaimStats | null>(null);
 
   const [newClaimant, setNewClaimant] = useState("");
   const [newAmount, setNewAmount] = useState("");
@@ -36,6 +38,8 @@ export default function App() {
     setClaims(list);
     const rate = await api.getOverrideRate(org).catch(() => null);
     if (rate) setOverrideRate(rate.override_rate);
+    const latest = await api.getStats(org).catch(() => null);
+    if (latest) setStats(latest);
   }
 
   useEffect(() => {
@@ -147,6 +151,8 @@ export default function App() {
           </Card>
 
           <SearchPanel orgId={orgId} onOpen={(id) => openFromSearch(id).catch(() => {})} />
+
+          {stats && <StatsCards stats={stats} />}
 
           <Card>
             <CardHeader>

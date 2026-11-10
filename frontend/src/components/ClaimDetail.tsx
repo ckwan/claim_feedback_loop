@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, type Claim, type ClaimStatus, type HistorySummary, type Suggestion } from "@/lib/api";
 import { InvestigationPanel } from "@/components/InvestigationPanel";
+import { ReviewActions } from "@/components/ReviewActions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,7 +25,7 @@ type Phase = "idle" | "loading-suggestion" | "awaiting-decision" | "overriding" 
 // a request round-trip — the backend is still the source of truth and
 // re-validates on every POST /suggestions/{id}/feedback, so a mismatch
 // here is a UX annoyance, not a correctness bug.
-const VALID_TRANSITIONS: Record<ClaimStatus, ClaimStatus[]> = {
+export const VALID_TRANSITIONS: Record<ClaimStatus, ClaimStatus[]> = {
   open: ["under_review"],
   under_review: ["approved", "denied"],
   approved: [],
@@ -127,6 +128,8 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
         </div>
 
         <Separator />
+
+        <ReviewActions key={claim.id} orgId={orgId} claim={claim} onChanged={onChanged} />
 
         {phase === "idle" && (
           <Button onClick={handleGetSuggestion} className="gap-2">
