@@ -59,6 +59,19 @@ class ClaimStatusUpdate(BaseModel):
     new_status: ClaimStatus
 
 
+class DecisionStatsOut(BaseModel):
+    accepted: int
+    overridden: int
+    override_rate: float | None
+
+
+class ClaimStatsOut(BaseModel):
+    by_status: dict[ClaimStatus, int]
+    total: int
+    decisions: DecisionStatsOut
+    approval_rate: float | None
+
+
 # ---- Suggestions (the AI half of the feedback loop) ----
 
 

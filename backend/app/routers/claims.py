@@ -13,6 +13,7 @@ from app.models import VALID_TRANSITIONS, ClaimStatus
 from app.rag.embeddings import get_embedder
 from app.rag.indexing import try_index_claim
 from app.rag.retriever import get_history_summary, summarize_history
+from app.services.claim_stats import get_claim_stats
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/claims", tags=["claims"])
@@ -71,6 +72,15 @@ def list_claims(
     stmt = stmt.offset(offset).limit(limit)
 
     return db.execute(stmt).scalars().all()
+
+
+@router.get("/stats", response_model=schemas.ClaimStatsOut)
+def claim_stats(
+    db: Session = Depends(get_db),
+    org_id: str = Depends(get_current_org_id),
+):
+    # Declared before /{claim_id}, or "stats" would be read as a claim id.
+    return get_claim_stats(db, org_id)
 
 
 @router.get("/{claim_id}", response_model=schemas.ClaimOut)
