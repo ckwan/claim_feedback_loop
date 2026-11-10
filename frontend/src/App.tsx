@@ -9,7 +9,8 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { ClaimDetail } from "@/components/ClaimDetail";
 import { SearchPanel } from "@/components/SearchPanel";
 import { StatsCards } from "@/components/StatsCards";
-import { Plus, Gauge } from "lucide-react";
+import { ReviewQueue } from "@/components/ReviewQueue";
+import { Plus, Gauge, ListChecks, ArrowLeft } from "lucide-react";
 
 export default function App() {
   const [orgId, setOrgId] = useState<string | null>(
@@ -28,6 +29,16 @@ export default function App() {
   const [openedClaim, setOpenedClaim] = useState<Claim | null>(null);
   const [overrideRate, setOverrideRate] = useState<number | null>(null);
   const [stats, setStats] = useState<ClaimStats | null>(null);
+
+  // No router in this app: the review queue lives at #/queue, everything else is the claims view.
+  const [view, setView] = useState<"claims" | "queue">(() =>
+    window.location.hash === "#/queue" ? "queue" : "claims"
+  );
+  useEffect(() => {
+    const onHash = () => setView(window.location.hash === "#/queue" ? "queue" : "claims");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   const [newClaimant, setNewClaimant] = useState("");
   const [newAmount, setNewAmount] = useState("");
@@ -94,14 +105,50 @@ export default function App() {
               Signed in as {adjusterName} &middot; org {orgId.slice(0, 8)}
             </p>
           </div>
-          {overrideRate !== null && (
-            <div className="flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm">
-              <Gauge className="h-4 w-4 text-muted-foreground" />
-              Override rate: <span className="font-medium">{(overrideRate * 100).toFixed(0)}%</span>
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            {overrideRate !== null && (
+              <div className="flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm">
+                <Gauge className="h-4 w-4 text-muted-foreground" />
+                Override rate: <span className="font-medium">{(overrideRate * 100).toFixed(0)}%</span>
+              </div>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={() => {
+                window.location.hash = view === "queue" ? "" : "#/queue";
+              }}
+            >
+              {view === "queue" ? (
+                <><ArrowLeft className="h-4 w-4" />Claims</>
+              ) : (
+                <><ListChecks className="h-4 w-4" />Review queue</>
+              )}
+            </Button>
+          </div>
         </div>
       </header>
+
+      {view === "queue" ? (
+        <main className="container space-y-6 py-8">
+          {stats && <StatsCards stats={stats} />}
+          <ReviewQueue
+            orgId={orgId}
+            adjusterId={adjusterId}
+            stats={stats}
+            onChanged={() => refreshClaims(orgId)}
+            onOpen={(id) => {
+              // Fetch fresh, like a search hit, then go to the claims view where the detail lives.
+              openFromSearch(id)
+                .then(() => {
+                  window.location.hash = "";
+                })
+                .catch(() => {});
+            }}
+          />
+        </main>
+      ) : (
 
       <main className="container grid grid-cols-1 gap-6 py-8 lg:grid-cols-[360px_1fr]">
         <div className="space-y-6">
@@ -195,6 +242,7 @@ export default function App() {
           )}
         </div>
       </main>
+      )}
     </div>
   );
 }

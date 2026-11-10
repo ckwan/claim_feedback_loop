@@ -88,6 +88,15 @@ class SuggestionOut(BaseModel):
     created_at: datetime
 
 
+class QueueSuggestionOut(SuggestionOut):
+    # Whether an adjuster has already answered it. A suggestion takes feedback once.
+    has_feedback: bool
+
+
+class ClaimQueueItemOut(ClaimOut):
+    latest_suggestion: QueueSuggestionOut | None
+
+
 # ---- Feedback (the human half of the feedback loop) ----
 
 

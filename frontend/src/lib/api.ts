@@ -28,6 +28,15 @@ export interface Suggestion {
   created_at: string;
 }
 
+export interface QueueSuggestion extends Suggestion {
+  // A suggestion takes feedback once; true means an adjuster already answered it.
+  has_feedback: boolean;
+}
+
+export interface QueueItem extends Claim {
+  latest_suggestion: QueueSuggestion | null;
+}
+
 export interface Feedback {
   id: string;
   suggestion_id: string;
@@ -200,6 +209,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question: question || null }),
     }),
+
+  getQueue: (orgId: string, status?: ClaimStatus) =>
+    request<QueueItem[]>(orgId, `/claims/queue${status ? `?status=${status}` : ""}`),
 
   getStats: (orgId: string) => request<ClaimStats>(orgId, "/claims/stats"),
 

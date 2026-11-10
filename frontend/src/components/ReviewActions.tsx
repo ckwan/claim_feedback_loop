@@ -6,7 +6,7 @@ import { Check, X, Loader2 } from "lucide-react";
 type Decision = "approved" | "denied";
 
 // api.ts throws `409 Conflict: {"detail":"..."}`. Show only the detail.
-function detailOf(e: unknown): string {
+export function detailOf(e: unknown): string {
   const message = (e as Error).message;
   try {
     return JSON.parse(message.slice(message.indexOf("{"))).detail ?? message;

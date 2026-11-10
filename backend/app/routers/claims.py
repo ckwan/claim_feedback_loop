@@ -14,6 +14,7 @@ from app.rag.embeddings import get_embedder
 from app.rag.indexing import try_index_claim
 from app.rag.retriever import get_history_summary, summarize_history
 from app.services.claim_stats import get_claim_stats
+from app.services.review_queue import get_review_queue
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/claims", tags=["claims"])
@@ -81,6 +82,31 @@ def claim_stats(
 ):
     # Declared before /{claim_id}, or "stats" would be read as a claim id.
     return get_claim_stats(db, org_id)
+
+
+@router.get("/queue", response_model=list[schemas.ClaimQueueItemOut])
+def review_queue(
+    db: Session = Depends(get_db),
+    org_id: str = Depends(get_current_org_id),
+    status_filter: ClaimStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    """Oldest claims first, each with its latest suggestion, in one query."""
+    return [
+        schemas.ClaimQueueItemOut(
+            **schemas.ClaimOut.model_validate(claim).model_dump(),
+            latest_suggestion=(
+                schemas.QueueSuggestionOut(
+                    **schemas.SuggestionOut.model_validate(suggestion).model_dump(),
+                    has_feedback=has_feedback,
+                )
+                if suggestion is not None
+                else None
+            ),
+        )
+        for claim, suggestion, has_feedback in get_review_queue(db, org_id, status_filter, limit, offset)
+    ]
 
 
 @router.get("/{claim_id}", response_model=schemas.ClaimOut)
