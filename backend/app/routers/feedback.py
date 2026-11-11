@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import get_db
 from app.deps import get_current_org_id
-from app.models import VALID_TRANSITIONS, ClaimStatus
+from app.models import VALID_TRANSITIONS, AuditEventType, ClaimStatus
+from app.services.audit import record_event
 
 router = APIRouter(tags=["feedback"])
 
@@ -25,6 +26,15 @@ def record_feedback(
     if suggestion.feedback is not None:
         raise HTTPException(
             status_code=409, detail="Feedback already recorded for this suggestion"
+        )
+
+    if suggestion.is_stale:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This suggestion is out of date because the claim was edited after it was "
+                "made. Request a new suggestion and answer that one."
+            ),
         )
 
     if payload.action_taken == models.FeedbackAction.OVERRIDDEN and not payload.override_reason:
@@ -71,6 +81,15 @@ def record_feedback(
         override_reason=payload.override_reason,
     )
     db.add(feedback)
+    record_event(
+        db, claim, AuditEventType.STATUS_CHANGE,
+        old=claim.status.value, new=new_status.value, adjuster_id=payload.adjuster_id,
+    )
+    record_event(
+        db, claim, AuditEventType.SUGGESTION_DECISION,
+        field=payload.action_taken.value, old=suggestion.suggested_action,
+        new=payload.final_action, detail=payload.override_reason, adjuster_id=payload.adjuster_id,
+    )
     claim.status = new_status
     db.commit()
     db.refresh(feedback)

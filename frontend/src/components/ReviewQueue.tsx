@@ -47,7 +47,9 @@ function ageInDays(createdAt: string): number {
 // What choosing `target` means for this claim. An unanswered AI suggestion is answered
 // by the same click: accepted when it matches, overridden (with a reason) when it doesn't.
 function plan(item: QueueItem, target: ClaimStatus) {
-  const pending = item.latest_suggestion && !item.latest_suggestion.has_feedback ? item.latest_suggestion : null;
+  // A stale suggestion (the claim was edited after it) can't be answered, so it is not pending.
+  const latest = item.latest_suggestion;
+  const pending = latest && !latest.has_feedback && !latest.is_stale ? latest : null;
   return {
     pending,
     override: pending !== null && pending.suggested_action !== target,
@@ -112,7 +114,7 @@ export function ReviewQueue({ orgId, adjusterId, stats, onOpen, onChanged }: Pro
           override_reason: override ? note : undefined,
         });
       } else {
-        await api.updateClaimStatus(orgId, item.id, target);
+        await api.updateClaimStatus(orgId, item.id, target, adjusterId);
       }
       setToast({ message: `${item.claimant_name}: ${ACTION_LABEL[target]} done.`, error: false });
     } catch (e) {
@@ -213,6 +215,9 @@ export function ReviewQueue({ orgId, adjusterId, stats, onOpen, onChanged }: Pro
                           <span>
                             {sug.suggested_action} &middot; {(sug.confidence * 100).toFixed(0)}%
                             {sug.has_feedback && <span className="text-muted-foreground"> (answered)</span>}
+                            {sug.is_stale && !sug.has_feedback && (
+                              <span className="text-amber-700"> (out of date)</span>
+                            )}
                           </span>
                         ) : (
                           <span className="text-muted-foreground">none yet</span>

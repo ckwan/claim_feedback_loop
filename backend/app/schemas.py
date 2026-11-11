@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models import ClaimStatus, FeedbackAction
 
@@ -57,6 +57,50 @@ class ClaimOut(BaseModel):
 
 class ClaimStatusUpdate(BaseModel):
     new_status: ClaimStatus
+    # Who did it, for the claim history. Optional because auth is only an org header.
+    adjuster_id: str | None = None
+
+
+MAX_NOTES_CHARS = 5000
+
+
+class ClaimEdit(BaseModel):
+    """The only fields an edit may touch. Anything else, status and org_id included, is a 422."""
+
+    model_config = ConfigDict(extra="forbid")
+    claimant_name: str | None = Field(default=None, max_length=255)
+    amount: float | None = Field(default=None, gt=0)
+    history_notes: str | None = Field(default=None, max_length=MAX_NOTES_CHARS)
+    adjuster_id: str | None = None
+
+    @field_validator("claimant_name")
+    @classmethod
+    def _name_not_blank(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("claimant_name must not be empty")
+        return v
+
+    @model_validator(mode="after")
+    def _required_fields_not_null(self):
+        # history_notes may be set to null to clear it. The other two may not.
+        for name in ("claimant_name", "amount"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        return self
+
+
+class AuditEventOut(BaseModel):
+    id: int
+    event_type: str
+    field: str | None
+    old_value: str | None
+    new_value: str | None
+    detail: str | None
+    adjuster_id: str | None
+    adjuster_name: str | None
+    created_at: datetime
 
 
 class DecisionStatsOut(BaseModel):
@@ -85,6 +129,7 @@ class SuggestionOut(BaseModel):
     rationale: str | None
     confidence: float
     model_version: str
+    is_stale: bool = False
     created_at: datetime
 
 

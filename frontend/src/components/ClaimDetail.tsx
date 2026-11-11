@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type Claim, type ClaimStatus, type HistorySummary, type Suggestion } from "@/lib/api";
 import { InvestigationPanel } from "@/components/InvestigationPanel";
 import { ReviewActions } from "@/components/ReviewActions";
+import { ClaimEditForm } from "@/components/ClaimEditForm";
+import { ClaimHistory } from "@/components/ClaimHistory";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Sparkles, ThumbsUp, ThumbsDown, BookOpen, Loader2 } from "lucide-react";
+import { Sparkles, ThumbsUp, ThumbsDown, BookOpen, Loader2, Pencil } from "lucide-react";
 
 interface Props {
   orgId: string;
@@ -46,6 +48,20 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
   const [summary, setSummary] = useState<HistorySummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  // Selecting another claim closes the form, so it never edits the wrong one.
+  useEffect(() => setEditing(false), [claim.id]);
+
+  // Editing the amount or the notes makes the suggestion on screen out of date. The
+  // backend marks them stale; this mirrors that for the one already loaded here.
+  function handleEdited(changed: string[]) {
+    setEditing(false);
+    if (suggestion && (changed.includes("amount") || changed.includes("history_notes"))) {
+      setSuggestion({ ...suggestion, is_stale: true });
+      if (phase === "overriding") setPhase("awaiting-decision");
+    }
+    onChanged();
+  }
 
   async function handleGetSuggestion() {
     setError(null);
@@ -127,9 +143,27 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
           <p className="mt-1 text-sm">{claim.history_notes || "—"}</p>
         </div>
 
+        {editing && VALID_TRANSITIONS[claim.status].length > 0 ? (
+          <ClaimEditForm
+            key={`edit-${claim.id}`}
+            orgId={orgId}
+            adjusterId={adjusterId}
+            claim={claim}
+            onCancel={() => setEditing(false)}
+            onSaved={handleEdited}
+          />
+        ) : (
+          VALID_TRANSITIONS[claim.status].length > 0 && (
+            <Button variant="outline" size="sm" className="gap-2" onClick={() => setEditing(true)}>
+              <Pencil className="h-4 w-4" />
+              Edit details
+            </Button>
+          )
+        )}
+
         <Separator />
 
-        <ReviewActions key={claim.id} orgId={orgId} claim={claim} onChanged={onChanged} />
+        <ReviewActions key={claim.id} orgId={orgId} adjusterId={adjusterId} claim={claim} onChanged={onChanged} />
 
         {phase === "idle" && (
           <Button onClick={handleGetSuggestion} className="gap-2">
@@ -152,6 +186,14 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
               <Badge variant="outline">{suggestion.suggested_action}</Badge>
             </div>
             <p className="text-sm text-muted-foreground">{suggestion.rationale}</p>
+            {suggestion.is_stale && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-amber-100 p-2 text-sm text-amber-800">
+                <span>Suggestion is out of date, request a new one.</span>
+                <Button size="sm" variant="outline" onClick={handleGetSuggestion}>
+                  Request new suggestion
+                </Button>
+              </div>
+            )}
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
               <span>Confidence: {(suggestion.confidence * 100).toFixed(0)}%</span>
               <span>&middot;</span>
@@ -160,14 +202,14 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
           </div>
         )}
 
-        {phase === "awaiting-decision" && adjusterId && suggestion?.suggested_action === "no_action" && (
+        {phase === "awaiting-decision" && adjusterId && !suggestion?.is_stale && suggestion?.suggested_action === "no_action" && (
           <p className="text-sm text-muted-foreground">
             This claim is already {claim.status} — there's nothing left to
             accept or override.
           </p>
         )}
 
-        {phase === "awaiting-decision" && adjusterId && suggestion?.suggested_action !== "no_action" && (
+        {phase === "awaiting-decision" && adjusterId && !suggestion?.is_stale && suggestion?.suggested_action !== "no_action" && (
           <div className="flex flex-wrap gap-2">
             <Button onClick={handleAccept} variant="default" className="gap-2">
               <ThumbsUp className="h-4 w-4" />
@@ -247,6 +289,9 @@ export function ClaimDetail({ orgId, adjusterId, claim, onChanged }: Props) {
         )}
 
         {error && <p className="text-sm text-destructive">{error}</p>}
+
+        <Separator />
+        <ClaimHistory orgId={orgId} claim={claim} />
       </CardContent>
       <CardFooter className="flex-col items-stretch gap-2 border-t pt-4">
         <Button

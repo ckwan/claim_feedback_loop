@@ -21,10 +21,12 @@ export function detailOf(e: unknown): string {
  */
 export function ReviewActions({
   orgId,
+  adjusterId,
   claim,
   onChanged,
 }: {
   orgId: string;
+  adjusterId?: string | null;
   claim: Claim;
   onChanged: () => void;
 }) {
@@ -38,7 +40,7 @@ export function ReviewActions({
     setBusy(true);
     setError(null);
     try {
-      await api.updateClaimStatus(orgId, claim.id, decision);
+      await api.updateClaimStatus(orgId, claim.id, decision, adjusterId);
       setConfirming(null);
       onChanged();
     } catch (e) {

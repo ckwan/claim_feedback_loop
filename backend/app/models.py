@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     Computed,
     DateTime,
     Enum,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -116,6 +118,11 @@ class Suggestion(Base):
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     model_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Set when the claim's amount or notes are edited after this was made. A stale
+    # suggestion can no longer be accepted or overridden: ask for a new one.
+    is_stale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     claim: Mapped["Claim"] = relationship(back_populates="suggestions")
@@ -144,6 +151,46 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     suggestion: Mapped["Suggestion"] = relationship(back_populates="feedback")
+
+
+class AuditEventType(str, enum.Enum):
+    CREATED = "created"
+    FIELD_EDIT = "field_edit"
+    STATUS_CHANGE = "status_change"
+    SUGGESTION_DECISION = "suggestion_decision"
+    SUGGESTIONS_STALE = "suggestions_stale"
+
+
+class AuditEvent(Base):
+    """One thing that happened to a claim. Append only: rows are never changed.
+
+    field_edit:          field, old_value, new_value
+    status_change:       old_value, new_value (the statuses)
+    suggestion_decision: field is accepted/overridden, old_value is what the AI
+                         suggested, new_value what the adjuster chose, detail the reason
+    suggestions_stale:   new_value says how many suggestions were marked stale
+    """
+
+    __tablename__ = "audit_events"
+    __table_args__ = (Index("ix_audit_events_org_claim", "org_id", "claim_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False
+    )
+    claim_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("claims.id"), nullable=False
+    )
+    # Who did it. Null when the caller did not say (auth is only an org header).
+    adjuster_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("adjusters.id"), nullable=True
+    )
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    field: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class ClaimChunk(Base):

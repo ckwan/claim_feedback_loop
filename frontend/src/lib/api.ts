@@ -25,7 +25,28 @@ export interface Suggestion {
   rationale: string | null;
   confidence: number;
   model_version: string;
+  // The claim's amount or notes were edited after this was made. It can't be answered any more.
+  is_stale: boolean;
   created_at: string;
+}
+
+export interface AuditEvent {
+  id: number;
+  event_type: "created" | "field_edit" | "status_change" | "suggestion_decision" | "suggestions_stale";
+  field: string | null;
+  old_value: string | null;
+  new_value: string | null;
+  detail: string | null;
+  adjuster_id: string | null;
+  adjuster_name: string | null;
+  created_at: string;
+}
+
+export interface ClaimEditPayload {
+  claimant_name?: string;
+  amount?: number;
+  history_notes?: string | null;
+  adjuster_id?: string;
 }
 
 export interface QueueSuggestion extends Suggestion {
@@ -160,11 +181,20 @@ export const api = {
   getClaim: (orgId: string, claimId: string) =>
     request<Claim>(orgId, `/claims/${claimId}`),
 
-  updateClaimStatus: (orgId: string, claimId: string, newStatus: ClaimStatus) =>
+  updateClaimStatus: (orgId: string, claimId: string, newStatus: ClaimStatus, adjusterId?: string | null) =>
     request<Claim>(orgId, `/claims/${claimId}/status`, {
       method: "PATCH",
-      body: JSON.stringify({ new_status: newStatus }),
+      body: JSON.stringify({ new_status: newStatus, adjuster_id: adjusterId ?? undefined }),
     }),
+
+  editClaim: (orgId: string, claimId: string, payload: ClaimEditPayload) =>
+    request<Claim>(orgId, `/claims/${claimId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  getClaimHistory: (orgId: string, claimId: string) =>
+    request<AuditEvent[]>(orgId, `/claims/${claimId}/history`),
 
   requestSuggestion: (orgId: string, claimId: string) =>
     request<Suggestion>(orgId, `/claims/${claimId}/suggest`, { method: "POST" }),
