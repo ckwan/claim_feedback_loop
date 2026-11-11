@@ -41,12 +41,25 @@ class ClaimCreate(BaseModel):
     claimant_name: str
     amount: float
     history_notes: str | None = None
+    # The calling system's own id for this claim. Sending the same one again for the
+    # same org returns the existing claim instead of creating another.
+    external_ref: str | None = Field(default=None, max_length=128)
+
+    @field_validator("external_ref")
+    @classmethod
+    def _ref_not_blank(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("external_ref must not be empty")
+        return v
 
 
 class ClaimOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     org_id: str
+    external_ref: str | None
     claimant_name: str
     amount: float
     status: ClaimStatus

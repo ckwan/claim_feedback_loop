@@ -1,7 +1,7 @@
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.safety import clean_text
 from app.rag.retriever import get_history_summary, summarize_history
 from app.services.audit import get_claim_history, record_event
 from app.services.claim_edit import edit_claim
+from app.services.claim_intake import create_or_get_claim
 from app.services.claim_stats import get_claim_stats
 from app.services.review_queue import get_review_queue
 
@@ -23,9 +24,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/claims", tags=["claims"])
 
 
-@router.post("", response_model=schemas.ClaimOut)
+@router.post("", response_model=schemas.ClaimOut, status_code=201)
 def create_claim(
     payload: schemas.ClaimCreate,
+    response: Response,
     db: Session = Depends(get_db),
     org_id: str = Depends(get_current_org_id),
 ):
@@ -34,17 +36,18 @@ def create_claim(
         # client-supplied org_id on writes without checking it against auth.
         raise HTTPException(status_code=403, detail="org_id mismatch")
 
-    claim = models.Claim(
-        org_id=org_id,
+    claim, created = create_or_get_claim(
+        db,
+        org_id,
         claimant_name=payload.claimant_name,
         amount=payload.amount,
         history_notes=payload.history_notes,
+        external_ref=payload.external_ref,
     )
-    db.add(claim)
-    db.flush()  # assigns the id, so the history entry is saved in the same commit
-    record_event(db, claim, AuditEventType.CREATED, new=claim.status.value)
-    db.commit()
-    db.refresh(claim)
+    if not created:
+        # A retry with the same external_ref: the existing claim, and nothing else is written.
+        response.status_code = 200
+        return claim
     if session_is_postgres(db):
         # Make the notes searchable. A failure here (say Ollama is not running) never
         # fails the claim. POST /claims/reindex catches up later.

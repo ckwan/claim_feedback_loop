@@ -65,22 +65,122 @@ what's production-shaped.
 
 ```mermaid
 flowchart LR
-    Client["API Client\n(curl / Swagger UI —\nadjuster-facing UI not built yet)"] -->|HTTP| Router["Routers\n(claims, suggestions, feedback)"]
-    Router --> Service["Suggestion Service\n(business + AI logic)"]
-    Service -->|"next: real LLM call"| LLM["LLM\n(Day 2)"]
-    Service --> DB[("Postgres / SQLite\norg-scoped tables")]
-    Router --> DB
-    Feedback["Adjuster override + reason"] --> Router
-    DB -->|"few-shot context\n(Day 2)"| Service
+    subgraph Callers
+        UI["React UI<br/>claim list and detail<br/>review queue, stats cards,<br/>edit form, history"]
+        NL["External system (NoteLoop)<br/>POST /claims with external_ref"]
+    end
+
+    subgraph API["FastAPI routers (every query scoped by X-Org-Id)"]
+        Claims["claims<br/>create, edit, status,<br/>stats, queue, history"]
+        Sugg["suggestions"]
+        Fb["feedback<br/>accept or override"]
+        Srch["search and investigate"]
+    end
+
+    subgraph Svc["Services"]
+        Intake["claim_intake<br/>idempotent create"]
+        Edit["claim_edit<br/>diff, mark suggestions stale"]
+        Stats["claim_stats, review_queue<br/>GROUP BY, one query"]
+        Audit["audit<br/>append-only claim history"]
+        SuggSvc["suggestion_service<br/>few-shot from overrides"]
+        Rag["RAG<br/>hybrid search, rerank,<br/>ReAct investigator"]
+    end
+
+    LLM["LLM and embedder"]
+    DB[("Postgres + pgvector<br/>claims, suggestions, feedback,<br/>audit_events, claim_chunks")]
+
+    UI -->|HTTP| API
+    NL -->|"201 new, 200 repeat"| Claims
+    Claims --> Intake
+    Claims --> Edit
+    Claims --> Stats
+    Claims --> Audit
+    Sugg --> SuggSvc
+    Fb --> Audit
+    Srch --> Rag
+    SuggSvc --> LLM
+    Rag --> LLM
+    Edit -->|"notes changed: re-index"| Rag
+    Intake --> DB
+    Edit -->|"amount or notes changed:<br/>suggestions.is_stale"| DB
+    Stats --> DB
+    Audit --> DB
+    Fb -->|"stale suggestion: 409"| DB
+    DB -->|"overrides as few-shot context"| SuggSvc
+    Rag --> DB
 ```
 
+The state machine is unchanged. Claims can be edited only while they are open or under review.
+
+```mermaid
+stateDiagram-v2
+    [*] --> open: claim created
+    open --> under_review: start review
+    under_review --> approved: approve (final)
+    under_review --> denied: deny (final)
+    approved --> [*]
+    denied --> [*]
+    note right of open
+        Edit details allowed in open and under_review.
+        Editing the amount or notes makes earlier
+        AI suggestions stale.
+    end note
+```
+
+What happens when a claim is edited (`PATCH /claims/{id}`):
+
+```mermaid
+flowchart TD
+    A["PATCH /claims/id<br/>amount, claimant_name, history_notes"] --> B{"claim in this org?"}
+    B -->|no| N404["404 (same as missing)"]
+    B -->|yes| C{"approved or denied?"}
+    C -->|yes| N409["409 final, no edit"]
+    C -->|no| D{"valid?<br/>amount above 0, name not blank,<br/>notes under 5000, no extra fields"}
+    D -->|no| N422["422"]
+    D -->|yes| E{"any value different?"}
+    E -->|no| NOOP["200, nothing written"]
+    E -->|yes| F["write one history row per changed field"]
+    F --> G{"amount or notes changed?"}
+    G -->|yes| H["mark claim's suggestions stale<br/>and log it in the history"]
+    G -->|no| I["commit"]
+    H --> I
+    I --> J{"notes changed?"}
+    J -->|yes| K["re-index claim for search<br/>(never fails the edit)"]
+    J -->|no| L["200 updated claim"]
+    K --> L
+    L -.-> M["accept or override of a stale suggestion<br/>returns 409: request a new suggestion"]
+```
+
+What happens when an outside system submits a claim (`POST /claims` with `external_ref`):
+
+```mermaid
+flowchart TD
+    A["POST /claims<br/>external_ref present"] --> B{"org_id in body equals X-Org-Id?"}
+    B -->|no| N403["403"]
+    B -->|yes| C{"claim with same<br/>org_id and external_ref?"}
+    C -->|yes| R200["200 existing claim, unchanged<br/>nothing written<br/>(warn if payload differed)"]
+    C -->|no| D["INSERT claim and history row"]
+    D --> E{"unique index<br/>(org_id, external_ref) violated?"}
+    E -->|"yes: a concurrent retry won"| F["roll back, re-read"]
+    F --> R200
+    E -->|no| R201["201 new claim, then index notes"]
+```
+
+Where the review dashboard fits: `GET /claims/stats` feeds the stat cards (counts by status,
+approval rate, override rate), and `GET /claims/queue` feeds the review queue table
+(oldest first, each claim with its latest suggestion in one query). Approve, deny and
+start review from a row go through the existing feedback or status endpoint.
+
 Request flow: a client calls a router endpoint → the router validates the
-request and delegates to the service layer → the service holds the
-suggestion logic (currently rule-based, LLM next) and is the only layer
-that talks to an LLM → every DB read/write, in both the router and the
-service, is scoped by `org_id`. Adjuster feedback flows back in through the
-same router layer and lands in a table `prompts.py` queries directly for
-few-shot context on every subsequent suggestion for that org.
+request and delegates to a service (`claim_intake`, `claim_edit`,
+`claim_stats`, `review_queue`, `audit`, `suggestion_service`) → the
+suggestion service and the RAG code are the only layers that talk to an
+LLM → every DB read/write, in both the router and the services, is scoped by
+`org_id`. Adjuster feedback flows back in through the same router layer and
+lands in a table `prompts.py` queries directly for few-shot context on every
+subsequent suggestion for that org. Every change to a claim (creation, edits,
+status changes, decisions, stale suggestions) is also written to the
+`audit_events` table, which the claim detail panel shows as its history.
 
 ## 4. Future Improvements
 
@@ -132,6 +232,59 @@ Honest limits:
 - The eval set is 30 synthetic claims and 20 queries. It shows the method differences, not production accuracy.
 
 More on the Postgres side: `docs/pgvector-notes.md`.
+
+
+## Idempotent intake (external systems)
+
+An outside system, such as NoteLoop (https://github.com/ckwan/note_loop), can submit claims and safely retry. Send your own id
+for the claim as `external_ref`, and a retry returns the claim you already created.
+
+**Request**
+
+```
+POST /claims
+X-Org-Id: <org id>
+Content-Type: application/json
+
+{
+  "org_id": "<org id>",              // must equal X-Org-Id
+  "claimant_name": "Jane Doe",
+  "amount": 500.0,
+  "history_notes": "optional",
+  "external_ref": "noteloop-4821"    // optional, 1 to 128 characters
+}
+```
+
+**Responses**
+
+| Status | When | Body |
+|---|---|---|
+| `201` | A new claim was created | the claim |
+| `200` | This org already has a claim with the same `external_ref` | the **existing** claim, unchanged |
+| `403` | `org_id` in the body is not the `X-Org-Id` org | error |
+| `422` | `external_ref` is empty or only whitespace, is over 128 characters, or the body is invalid | error |
+
+The claim has `id`, `status`, `external_ref` and `updated_at`. Read it back with
+`GET /claims/{id}`, which gives the same shape.
+
+**Rules**
+- `external_ref` is unique **per organization**. The same value in two orgs makes two claims.
+  A claim from another org is never returned or readable (`404`).
+- Surrounding whitespace is trimmed, so `" abc "` and `"abc"` are the same reference.
+- A repeat returns the stored claim as it is. The new body is **not applied**: nothing is
+  updated, no history entry is written and nothing is re-indexed. If the repeat's
+  `claimant_name`, `amount` or `history_notes` differ from the stored claim, the service logs
+  a warning with the claim id and the differing field names, never the values.
+- It is safe when retries arrive at the same time. A unique index on `(org_id, external_ref)`
+  (only where `external_ref` is set) lets one insert win, and the others read and return that row.
+- Without `external_ref`, every call creates a new claim.
+
+**Status code change:** `POST /claims` now answers `201 Created` on success. It answered `200`
+before. Callers that check for `200` exactly must accept `201` too. Clients that check `res.ok`
+need no change.
+
+Migration `0004` adds the column and the index. Run `alembic upgrade head`. With docker compose,
+`docker compose restart backend` does it, because migrations run when the container starts.
 
 
 ## Folder structure
@@ -267,9 +420,6 @@ curl -s localhost:8000/feedback/override-rate -H "X-Org-Id: <ORG_ID>"
 curl -s localhost:8000/claims/<NEW_CLAIM_ID>/history-summary -H "X-Org-Id: <ORG_ID>"
 ```
 
-To use a real LLM instead of the offline stub, set `ANTHROPIC_API_KEY` in
-your environment before starting the server — `backend/app/agents/llm_client.py`
-picks that up automatically; no code change needed.
 
 ## Still open (see Future Improvements above)
 

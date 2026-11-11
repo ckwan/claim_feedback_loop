@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    text,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -84,12 +85,24 @@ class Claim(Base):
         # Every real query filters by org_id first — this is the tenant-isolation
         # index an interviewer will specifically look for.
         Index("ix_claims_org_id_status", "org_id", "status"),
+        # An external system's own id for the claim, unique per organization. It is a
+        # partial index so the many claims without a reference never collide. This is
+        # what makes concurrent retries safe: the database lets only one insert win.
+        Index(
+            "uq_claims_org_external_ref",
+            "org_id",
+            "external_ref",
+            unique=True,
+            postgresql_where=text("external_ref IS NOT NULL"),
+            sqlite_where=text("external_ref IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("organizations.id"), nullable=False, index=True
     )
+    external_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
     claimant_name: Mapped[str] = mapped_column(String(255), nullable=False)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[ClaimStatus] = mapped_column(

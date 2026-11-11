@@ -132,7 +132,7 @@ def make_claim(client, org_id, headers, notes="Water damage in the kitchen.", am
         "/claims", headers=headers,
         json={"org_id": org_id, "claimant_name": name, "amount": amount, "history_notes": notes},
     )
-    assert res.status_code == 200, res.text
+    assert res.status_code in (200, 201), res.text  # 201 created, 200 for a repeated external_ref
     return res.json()
 
 
