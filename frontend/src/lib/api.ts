@@ -144,6 +144,13 @@ async function request<T>(
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
+    if (res.status === 403 && body.includes("unknown organization")) {
+      // The saved org is gone (say the database was reset): forget it and show the setup screen.
+      for (const key of ["claims_org_id", "claims_adjuster_id", "claims_adjuster_name"]) {
+        localStorage.removeItem(key);
+      }
+      window.location.reload();
+    }
     throw new Error(`${res.status} ${res.statusText}: ${body}`);
   }
   return res.json() as Promise<T>;

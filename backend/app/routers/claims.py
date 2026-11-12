@@ -35,6 +35,9 @@ def create_claim(
         # The body's org_id must match the caller's tenant — never trust a
         # client-supplied org_id on writes without checking it against auth.
         raise HTTPException(status_code=403, detail="org_id mismatch")
+    if db.get(models.Organization, org_id) is None:
+        # An unknown tenant is a caller-identity problem, not a missing resource.
+        raise HTTPException(status_code=403, detail="unknown organization")
 
     claim, created = create_or_get_claim(
         db,
