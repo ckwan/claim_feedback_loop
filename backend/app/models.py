@@ -2,18 +2,31 @@ import enum
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
+    Computed,
     DateTime,
     Enum,
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
+    UniqueConstraint,
+    false,
+    text,
 )
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+
+# nomic-embed-text produces 768 numbers per text. A pgvector column has a fixed
+# size, so changing the embedding model to one with another size needs a migration.
+EMBEDDING_DIM = 768
 
 
 def _uuid() -> str:
@@ -72,12 +85,24 @@ class Claim(Base):
         # Every real query filters by org_id first — this is the tenant-isolation
         # index an interviewer will specifically look for.
         Index("ix_claims_org_id_status", "org_id", "status"),
+        # An external system's own id for the claim, unique per organization. It is a
+        # partial index so the many claims without a reference never collide. This is
+        # what makes concurrent retries safe: the database lets only one insert win.
+        Index(
+            "uq_claims_org_external_ref",
+            "org_id",
+            "external_ref",
+            unique=True,
+            postgresql_where=text("external_ref IS NOT NULL"),
+            sqlite_where=text("external_ref IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("organizations.id"), nullable=False, index=True
     )
+    external_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
     claimant_name: Mapped[str] = mapped_column(String(255), nullable=False)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[ClaimStatus] = mapped_column(
@@ -106,6 +131,11 @@ class Suggestion(Base):
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     model_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Set when the claim's amount or notes are edited after this was made. A stale
+    # suggestion can no longer be accepted or overridden: ask for a new one.
+    is_stale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     claim: Mapped["Claim"] = relationship(back_populates="suggestions")
@@ -134,3 +164,92 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     suggestion: Mapped["Suggestion"] = relationship(back_populates="feedback")
+
+
+class AuditEventType(str, enum.Enum):
+    CREATED = "created"
+    FIELD_EDIT = "field_edit"
+    STATUS_CHANGE = "status_change"
+    SUGGESTION_DECISION = "suggestion_decision"
+    SUGGESTIONS_STALE = "suggestions_stale"
+
+
+class AuditEvent(Base):
+    """One thing that happened to a claim. Append only: rows are never changed.
+
+    field_edit:          field, old_value, new_value
+    status_change:       old_value, new_value (the statuses)
+    suggestion_decision: field is accepted/overridden, old_value is what the AI
+                         suggested, new_value what the adjuster chose, detail the reason
+    suggestions_stale:   new_value says how many suggestions were marked stale
+    """
+
+    __tablename__ = "audit_events"
+    __table_args__ = (Index("ix_audit_events_org_claim", "org_id", "claim_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False
+    )
+    claim_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("claims.id"), nullable=False
+    )
+    # Who did it. Null when the caller did not say (auth is only an org header).
+    adjuster_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("adjusters.id"), nullable=True
+    )
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    field: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ClaimChunk(Base):
+    """A searchable piece of a claim's history notes (Postgres only).
+
+    Each chunk carries two search representations:
+      * embedding: a vector from an embedding model, for meaning based search
+      * tsv: a generated tsvector, for keyword search with stemming and ranking
+
+    org_id is stored on the chunk (denormalised from the claim) so every search can
+    filter by tenant on this one table without a join.
+    """
+
+    __tablename__ = "claim_chunks"
+    __table_args__ = (
+        UniqueConstraint("claim_id", "chunk_index", name="uq_claim_chunks_claim_index"),
+        Index("ix_claim_chunks_org_id", "org_id"),
+        # HNSW: an approximate nearest neighbour graph. m is links per node and
+        # ef_construction is the search width while building. vector_cosine_ops makes
+        # the index serve the <=> (cosine distance) operator.
+        Index(
+            "ix_claim_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+        # GIN: an inverted index from word to rows, for full text search.
+        Index("ix_claim_chunks_tsv", "tsv", postgresql_using="gin"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    claim_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("claims.id", ondelete="CASCADE"), nullable=False
+    )
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # sha256 of the content, so re-indexing can skip a chunk that did not change.
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Which model made the vector. Vectors from different models are not comparable,
+    # so searches only look at rows from the current model.
+    embedding_model: Mapped[str] = mapped_column(String(100), nullable=False)
+    embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
+    tsv = mapped_column(
+        TSVECTOR, Computed("to_tsvector('english', content)", persisted=True)
+    )

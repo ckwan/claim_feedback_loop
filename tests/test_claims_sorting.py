@@ -1,80 +1,68 @@
 from datetime import datetime
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
 
 from app import models
-from app.database import Base
-from app.routers.claims_route import list_claims
+from app.routers.claims import list_claims
 
 
-@pytest.fixture
-def db_session():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    with Session(engine) as session:
-        yield session
-    Base.metadata.drop_all(engine)
-    engine.dispose()
+def seed(db):
+    def claim(id_, org, name, amount, status, day):
+        return models.Claim(id=id_, org_id=org, claimant_name=name, amount=amount, status=status,
+                            created_at=datetime(2026, 1, day), updated_at=datetime(2026, 1, day))
+
+    db.add_all([
+        claim("org-a-open-low", "org-a", "Open low", 100, models.ClaimStatus.OPEN, 3),
+        claim("org-a-open-high", "org-a", "Open high", 300, models.ClaimStatus.OPEN, 2),
+        claim("org-a-review", "org-a", "Under review", 200, models.ClaimStatus.UNDER_REVIEW, 4),
+        claim("org-b-open", "org-b", "Other organization", 50, models.ClaimStatus.OPEN, 5),
+    ])
+    db.commit()
 
 
-@pytest.mark.parametrize(
-    ("amount_order", "expected_amount"),
-    [("asc", 300), ("desc", 100)],
-)
-def test_list_claims_sorts_amount_before_pagination_and_keeps_filters(
-    db_session: Session, amount_order: str, expected_amount: float
-):
-    db_session.add_all(
-        [
-            models.Claim(
-                id="org-a-open-low",
-                org_id="org-a",
-                claimant_name="Open low",
-                amount=100,
-                status=models.ClaimStatus.OPEN,
-                created_at=datetime(2026, 1, 3),
-                updated_at=datetime(2026, 1, 3),
-            ),
-            models.Claim(
-                id="org-a-open-high",
-                org_id="org-a",
-                claimant_name="Open high",
-                amount=300,
-                status=models.ClaimStatus.OPEN,
-                created_at=datetime(2026, 1, 2),
-                updated_at=datetime(2026, 1, 2),
-            ),
-            models.Claim(
-                id="org-a-review",
-                org_id="org-a",
-                claimant_name="Under review",
-                amount=200,
-                status=models.ClaimStatus.UNDER_REVIEW,
-                created_at=datetime(2026, 1, 4),
-                updated_at=datetime(2026, 1, 4),
-            ),
-            models.Claim(
-                id="org-b-open",
-                org_id="org-b",
-                claimant_name="Other organization",
-                amount=50,
-                status=models.ClaimStatus.OPEN,
-                created_at=datetime(2026, 1, 5),
-                updated_at=datetime(2026, 1, 5),
-            ),
-        ]
-    )
-    db_session.commit()
+def page(db, **kw):
+    args = dict(db=db, org_id="org-a", status_filter=None, amount_order=None, limit=20, offset=0)
+    args.update(kw)
+    return list_claims(**args)
 
-    claims = list_claims(
-        db=db_session,
-        org_id="org-a",
-        status_filter=models.ClaimStatus.OPEN,
-        amount_order=amount_order,
-        limit=1,
-        offset=1,
-    )
 
-    assert [claim.amount for claim in claims] == [expected_amount]
+@pytest.mark.parametrize(("amount_order", "expected_amount"), [("asc", 300), ("desc", 100)])
+def test_list_claims_sorts_amount_before_pagination_and_keeps_filters(db_session, amount_order, expected_amount):
+    seed(db_session)
+    claims = page(db_session, status_filter=models.ClaimStatus.OPEN, amount_order=amount_order, limit=1, offset=1)
+    assert [c.amount for c in claims] == [expected_amount]
+
+
+def test_default_order_is_newest_first(db_session):
+    seed(db_session)
+    assert [c.id for c in page(db_session)] == ["org-a-review", "org-a-open-low", "org-a-open-high"]
+
+
+def test_amount_order_covers_the_whole_result_not_just_a_page(db_session):
+    seed(db_session)
+    assert [c.amount for c in page(db_session, amount_order="asc")] == [100, 200, 300]
+    assert [c.amount for c in page(db_session, amount_order="desc", limit=2)] == [300, 200]
+
+
+def test_another_orgs_claims_never_appear_in_any_variant(db_session):
+    seed(db_session)
+    for order in (None, "asc", "desc"):
+        for status in (None, models.ClaimStatus.OPEN, models.ClaimStatus.UNDER_REVIEW):
+            assert all(c.org_id == "org-a" for c in page(db_session, status_filter=status, amount_order=order))
+
+
+def test_offset_past_the_end_is_empty(db_session):
+    seed(db_session)
+    assert page(db_session, offset=50) == []
+
+
+def test_amount_order_over_http(client):
+    from tests.conftest import make_claim, make_org
+
+    org_id, h = make_org(client)
+    for amount in (30, 10, 20):
+        make_claim(client, org_id, h, amount=amount)
+    res = client.get("/claims", headers=h, params={"amount_order": "asc", "limit": 2})
+    assert [c["amount"] for c in res.json()] == [10, 20]
+    assert client.get("/claims", headers=h, params={"amount_order": "sideways"}).status_code == 422
+    assert client.get("/claims", headers=h, params={"limit": 0}).status_code == 422

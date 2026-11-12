@@ -1,60 +1,59 @@
+"""The SQLite fallback for the history summary. The Postgres version, with citations,
+is tested in test_search_postgres.py."""
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
 
 from app import models
-from app.database import Base
-from app.routers.claims_route import claim_history_summary
-from app.services import suggestions_service
+from app.rag.retriever import get_history_summary
+from app.routers.claims import claim_history_summary
 
 
-@pytest.fixture
-def db_session():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    with Session(engine) as session:
-        yield session
-    Base.metadata.drop_all(engine)
-    engine.dispose()
+@pytest.fixture()
+def prompts(monkeypatch):
+    seen = []
+
+    class Client:
+        def complete(self, prompt, json_mode=False):
+            seen.append(prompt)
+            return "Back injuries here usually needed therapy."
+
+    monkeypatch.setattr("app.rag.legacy_retriever.get_llm_client", lambda: Client())
+    return seen
 
 
-def test_history_summary_uses_claim_notes_and_is_org_scoped(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-):
-    organization = models.Organization(id="org-a", name="Test Org")
-    claim = models.Claim(
-        id="claim-a",
-        org_id=organization.id,
-        claimant_name="Test Claimant",
-        amount=3200,
-        status=models.ClaimStatus.UNDER_REVIEW,
-        history_notes="Back injury with ongoing physical therapy.",
-    )
-    db_session.add_all([organization, claim])
+def add(db, id_, org, notes):
+    db.add(models.Claim(id=id_, org_id=org, claimant_name="x", amount=3200,
+                        status=models.ClaimStatus.UNDER_REVIEW, history_notes=notes))
+
+
+def test_summary_uses_similar_notes_from_the_same_org_only(db_session, prompts):
+    db_session.add_all([models.Organization(id="org-a", name="A"), models.Organization(id="org-b", name="B")])
+    add(db_session, "current", "org-a", "Back injury with ongoing physical therapy.")
+    add(db_session, "similar", "org-a", "Back injury treated with physical therapy last year.")
+    add(db_session, "foreign", "org-b", "Back injury and physical therapy at another insurer.")
     db_session.commit()
 
-    prompts = []
+    summary = get_history_summary(db_session.get(models.Claim, "current"), db_session)
+    assert summary == "Back injuries here usually needed therapy."
+    assert "last year" in prompts[0]
+    assert "another insurer" not in prompts[0]
 
-    def mock_llm(prompt: str) -> str:
-        prompts.append(prompt)
-        return (
-            '{"summary":"Back injury with ongoing therapy.", '
-            '"suggested_next_steps":["Discuss progress with the treating clinician"]}'
-        )
 
-    monkeypatch.setattr(suggestions_service, "_call_llm", mock_llm)
+def test_no_similar_claims_means_no_model_call(db_session, prompts):
+    db_session.add(models.Organization(id="org-a", name="A"))
+    add(db_session, "only", "org-a", "A lone note about something unique.")
+    db_session.commit()
+    summary = get_history_summary(db_session.get(models.Claim, "only"), db_session)
+    assert "No similar prior claims" in summary
+    assert prompts == []
 
-    result = claim_history_summary("claim-a", db=db_session, org_id="org-a")
 
-    assert result.summary == "Back injury with ongoing therapy."
-    assert result.suggested_next_steps == [
-        "Discuss progress with the treating clinician"
-    ]
-    assert "Back injury with ongoing physical therapy." in prompts[0]
-    assert "Do not diagnose" in prompts[0]
-
-    with pytest.raises(HTTPException) as error:
+def test_route_is_org_scoped(db_session, prompts):
+    db_session.add(models.Organization(id="org-a", name="A"))
+    add(db_session, "claim-a", "org-a", "Back injury with ongoing physical therapy.")
+    db_session.commit()
+    out = claim_history_summary("claim-a", db=db_session, org_id="org-a")
+    assert out.claim_id == "claim-a" and out.sources == [] and out.grounded is False
+    with pytest.raises(HTTPException) as err:
         claim_history_summary("claim-a", db=db_session, org_id="org-b")
-    assert error.value.status_code == 404
-    assert len(prompts) == 1
+    assert err.value.status_code == 404

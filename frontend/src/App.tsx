@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Claim } from "@/lib/api";
+import { api, type Claim, type ClaimStats } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7,7 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ClaimDetail } from "@/components/ClaimDetail";
-import { Plus, Gauge } from "lucide-react";
+import { SearchPanel } from "@/components/SearchPanel";
+import { StatsCards } from "@/components/StatsCards";
+import { ReviewQueue } from "@/components/ReviewQueue";
+import { Plus, Gauge, ListChecks, ArrowLeft } from "lucide-react";
 
 export default function App() {
   const [orgId, setOrgId] = useState<string | null>(
@@ -22,7 +25,20 @@ export default function App() {
 
   const [claims, setClaims] = useState<Claim[]>([]);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
+  // A claim opened from search may not be on the first page of the list.
+  const [openedClaim, setOpenedClaim] = useState<Claim | null>(null);
   const [overrideRate, setOverrideRate] = useState<number | null>(null);
+  const [stats, setStats] = useState<ClaimStats | null>(null);
+
+  // No router in this app: the review queue lives at #/queue, everything else is the claims view.
+  const [view, setView] = useState<"claims" | "queue">(() =>
+    window.location.hash === "#/queue" ? "queue" : "claims"
+  );
+  useEffect(() => {
+    const onHash = () => setView(window.location.hash === "#/queue" ? "queue" : "claims");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   const [newClaimant, setNewClaimant] = useState("");
   const [newAmount, setNewAmount] = useState("");
@@ -33,6 +49,8 @@ export default function App() {
     setClaims(list);
     const rate = await api.getOverrideRate(org).catch(() => null);
     if (rate) setOverrideRate(rate.override_rate);
+    const latest = await api.getStats(org).catch(() => null);
+    if (latest) setStats(latest);
   }
 
   useEffect(() => {
@@ -67,7 +85,15 @@ export default function App() {
     return <SetupScreen onSubmit={handleSetup} />;
   }
 
-  const selectedClaim = claims.find((c) => c.id === selectedClaimId) ?? null;
+  const selectedClaim =
+    claims.find((c) => c.id === selectedClaimId) ??
+    (openedClaim && openedClaim.id === selectedClaimId ? openedClaim : null);
+
+  async function openFromSearch(claimId: string) {
+    const claim = await api.getClaim(orgId!, claimId);
+    setOpenedClaim(claim);
+    setSelectedClaimId(claimId);
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -79,14 +105,50 @@ export default function App() {
               Signed in as {adjusterName} &middot; org {orgId.slice(0, 8)}
             </p>
           </div>
-          {overrideRate !== null && (
-            <div className="flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm">
-              <Gauge className="h-4 w-4 text-muted-foreground" />
-              Override rate: <span className="font-medium">{(overrideRate * 100).toFixed(0)}%</span>
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            {overrideRate !== null && (
+              <div className="flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm">
+                <Gauge className="h-4 w-4 text-muted-foreground" />
+                Override rate: <span className="font-medium">{(overrideRate * 100).toFixed(0)}%</span>
+              </div>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={() => {
+                window.location.hash = view === "queue" ? "" : "#/queue";
+              }}
+            >
+              {view === "queue" ? (
+                <><ArrowLeft className="h-4 w-4" />Claims</>
+              ) : (
+                <><ListChecks className="h-4 w-4" />Review queue</>
+              )}
+            </Button>
+          </div>
         </div>
       </header>
+
+      {view === "queue" ? (
+        <main className="container space-y-6 py-8">
+          {stats && <StatsCards stats={stats} />}
+          <ReviewQueue
+            orgId={orgId}
+            adjusterId={adjusterId}
+            stats={stats}
+            onChanged={() => refreshClaims(orgId)}
+            onOpen={(id) => {
+              // Fetch fresh, like a search hit, then go to the claims view where the detail lives.
+              openFromSearch(id)
+                .then(() => {
+                  window.location.hash = "";
+                })
+                .catch(() => {});
+            }}
+          />
+        </main>
+      ) : (
 
       <main className="container grid grid-cols-1 gap-6 py-8 lg:grid-cols-[360px_1fr]">
         <div className="space-y-6">
@@ -135,6 +197,10 @@ export default function App() {
             </CardContent>
           </Card>
 
+          <SearchPanel orgId={orgId} onOpen={(id) => openFromSearch(id).catch(() => {})} />
+
+          {stats && <StatsCards stats={stats} />}
+
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Claims</CardTitle>
@@ -176,6 +242,7 @@ export default function App() {
           )}
         </div>
       </main>
+      )}
     </div>
   );
 }
