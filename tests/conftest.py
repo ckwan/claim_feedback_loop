@@ -15,7 +15,9 @@ import os
 # never touch a developer's real database.
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["LLM_PROVIDER"] = "stub"
-for key in ("EMBEDDING_PROVIDER", "ANTHROPIC_API_KEY", "OLLAMA_MODEL"):
+# Set, not popped: load_dotenv() would otherwise refill it from a developer's .env.
+os.environ["EMBEDDING_PROVIDER"] = "stub"
+for key in ("OLLAMA_MODEL"):
     os.environ.pop(key, None)
 
 import pytest  # noqa: E402

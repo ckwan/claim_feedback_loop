@@ -1,6 +1,7 @@
 """Alembic environment. Reads DATABASE_URL like the app does."""
 import os
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from dotenv import load_dotenv
@@ -9,7 +10,7 @@ from sqlalchemy import create_engine, pool
 from app import models  # noqa: F401  (registers every table on Base.metadata)
 from app.database import Base
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, type Investigation } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Loader2, Telescope } from "lucide-react";
 
 const STOP_LABEL: Record<Investigation["stopped_because"], string> = {
@@ -15,12 +16,13 @@ export function InvestigationPanel({ orgId, claimId }: { orgId: string; claimId:
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Investigation | null>(null);
+  const [question, setQuestion] = useState("");
 
   async function run() {
     setLoading(true);
     setError(null);
     try {
-      setResult(await api.investigateClaim(orgId, claimId));
+      setResult(await api.investigateClaim(orgId, claimId, question.trim() || undefined));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -30,6 +32,15 @@ export function InvestigationPanel({ orgId, claimId }: { orgId: string; claimId:
 
   return (
     <div className="space-y-2">
+      <Input
+        value={question}
+        onChange={(e) => setQuestion(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && !loading && run()}
+        placeholder="What should the adjuster know before deciding on this claim? (default)"
+        maxLength={300}
+        disabled={loading}
+        aria-label="Question for the ReAct agent (optional)"
+      />
       <Button variant="ghost" size="sm" className="gap-2 self-start" onClick={run} disabled={loading}>
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Telescope className="h-4 w-4" />}
         Investigate with the ReAct agent

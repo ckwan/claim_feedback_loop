@@ -143,12 +143,18 @@ class OllamaLLMClient(LLMClient):
         self._model = model or os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
         self._base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         self._client = httpx.Client(base_url=self._base_url, timeout=timeout)
+        self._think = os.getenv("OLLAMA_THINK", "false")  # low/medium/high -> more tokens, more latency, more accuracy
 
     @traceable(name="ollama_llm_complete", run_type="llm")
     def complete(self, prompt: str, json_mode: bool = False) -> str:
         body = {"model": self._model, "prompt": prompt, "stream": False}
         if json_mode:
             body["format"] = "json"  # Ollama constrains the output to valid JSON
+        if self._think:
+          body["think"] = {"true": True, "false": False}.get(self._think, self._think)
+        # body["think"] = "low"  # Ollama's "think" param: low/medium/high -> more tokens, more latency, more accuracy
+        body["keep_alive"] = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+        print(body)
         response = self._client.post("/api/generate", json=body)
         response.raise_for_status()
         return response.json()["response"]
