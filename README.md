@@ -1,54 +1,194 @@
-# Claims Feedback Loop
+# Claims Feedback Loop (Agentic AI)
 
-A multi-tenant claims API with a human-feedback-loop pattern: an AI suggests
-the next action on a claim, a human adjuster (SME) accepts or overrides it,
-and that decision is captured for later analysis.
+A multi-tenant insurance claims API built around a human-in-the-loop feedback
+pattern. An AI suggests the next action on a claim, a human adjuster accepts
+or overrides it, and every override is captured with a reason and fed back as
+context for future suggestions instead of being discarded.
 
-This is deliberately scoped to run in minutes with **zero setup** (SQLite by
-default).
+**Stack:** FastAPI, SQLAlchemy, Alembic, Postgres with pgvector, LangGraph,
+React, TypeScript, Tailwind, Docker Compose. LLM and embeddings run through a
+provider wrapper (Anthropic, Ollama, or an offline stub).
 
-## Local LLM
+## What it does
 
-The backend uses Ollama on the host machine. Start Ollama, pull the default
-model, then start the application:
+- **Closes the feedback loop.** An override requires a reason, and the most
+  recent overrides for that org are injected into the next prompt as few-shot
+  examples. A human correction changes future suggestions.
+- **Validates every LLM answer.** Raw output is parsed into a strict schema,
+  retried once on failure, then replaced by a rule-based fallback. Nothing
+  trusts unvalidated model text.
+- **Searches claim history.** Hybrid search (pgvector vectors plus full text,
+  merged with Reciprocal Rank Fusion) with optional LLM reranking and a
+  history summary that must cite its sources.
+- **Investigates a claim.** A read-only ReAct agent (LangGraph, capped steps)
+  looks through similar claims and reports findings.
+- **Supports the adjuster's workflow.** Review queue, stats cards (counts,
+  approval rate, override rate), claim editing, and a full audit history.
+- **Accepts claims from outside systems safely.** Idempotent intake by
+  `external_ref`, so a retry never creates a duplicate.
 
-```bash
-ollama pull llama3.2
-docker compose up --build
+## 3. Architecture
+
+```mermaid
+flowchart LR
+    UI["React UI<br/>queue, stats, claim detail"]
+    EXT["External system<br/>POST /claims with external_ref"]
+    API["FastAPI routers<br/>every query scoped by org"]
+    SVC["Services<br/>intake, edit, stats,<br/>audit, suggestions"]
+    RAG["RAG<br/>hybrid search, rerank,<br/>ReAct investigator"]
+    LLM["LLM and embedder"]
+    DB[("Postgres + pgvector")]
+
+    UI --> API
+    EXT --> API
+    API --> SVC
+    API --> RAG
+    SVC --> DB
+    RAG --> DB
+    SVC --> LLM
+    RAG --> LLM
 ```
 
-Docker Compose connects to Ollama at `host.docker.internal:11434`. Set
-`OLLAMA_MODEL` to use another installed model or `OLLAMA_BASE_URL` to change
-the Ollama server address. Requests use a 120-second timeout by default,
-configurable with `OLLAMA_TIMEOUT_SECONDS`.
+### The feedback loop
 
+```mermaid
+flowchart LR
+    A["Claim"] --> B["AI suggests<br/>next action"]
+    B --> C{"Adjuster decides"}
+    C -->|accept| D["Recorded in history"]
+    C -->|"override + reason"| E["Override saved"]
+    E -->|"few-shot example"| B
+```
 
+### LangGraph agents
 
-## Why I Built This Project
+Two LangGraph graphs drive the multi-step AI work. Each has a hard stop so it
+can't loop forever.
 
-I wanted hands-on practice with a pattern that's increasingly common in AI products: using a human expert's corrections as a live feedback signal, instead of treating "the model was wrong" as a dead end. In an insurance claims context specifically, an adjuster overriding an AI's suggested action is valuable data — it's a signal about what the model is missing — and a well-designed system should capture and reuse that signal, not just log it and move on.
+**Claim investigator** (read-only ReAct loop, `agents/investigator.py`)
 
-I also wanted to practice this with the discipline a real B2B SaaS product needs: strict multi-tenant data isolation (every org's claims, adjusters, and feedback history stay scoped to that org), and a clear boundary between "HTTP plumbing" and "AI/business logic" so the AI piece can evolve independently without destabilizing the API layer around it.
+```mermaid
+flowchart LR
+    S(["start"]) --> T["think<br/>pick a tool or finish"]
+    T --> R{"stop?"}
+    R -->|"no: run tool,<br/>save observation"| T
+    R -->|"finished, step limit,<br/>repeated step, error"| E(["end: answer with<br/>cited claim ids"])
+```
 
+**Denial appeal drafter** (`agents/appeal_graph.py`)
 
-## Design Decisions
+```mermaid
+flowchart LR
+    S(["start"]) --> R["reason<br/>should we appeal?"]
+    R -->|"no"| E(["end"])
+    R -->|"yes"| D["draft letter"]
+    D --> V["validate"]
+    V -->|"pass"| E
+    V -->|"fail, retries left<br/>(errors fed back)"| D
+    V -->|"fail, out of retries"| E
+```
 
-- Service layer, not logic in the router. app/services/suggestion_service.py owns suggestion generation; app/routers/suggestions.py only parses the request, calls the service, and shapes the response. This keeps prompt construction, the LLM call, and (soon) retrieval of past feedback unit-testable on their own, with no FastAPI app or HTTP layer required to test them.
+### Claim lifecycle
 
-- Tenant scoping is enforced at the query level, everywhere. Every claim, adjuster, and feedback lookup is filtered by org_id — including a composite index on (org_id, status) for the common query pattern — rather than relying on an application-level check that's easy to forget on one endpoint and not another.
+Claims move `open → under_review → approved or denied`. An invalid move
+returns `409`.
 
-- An explicit claim state machine. Claims move through open → under_review → approved/denied via a transition table (app/models.py), and an invalid transition returns 409, not a silent no-op or a 500.
+```mermaid
+stateDiagram-v2
+    [*] --> open
+    open --> under_review
+    under_review --> approved
+    under_review --> denied
+    approved --> [*]
+    denied --> [*]
+```
 
-- The feedback loop is structural, not a log table. POST /suggestions/{id}/feedback requires an override_reason whenever an adjuster overrides a suggestion, and that reason is what Day 2's LLM integration will pull as few-shot context for similar future claims — the schema was designed around that reuse from the start, not bolted on later.
+For the step-by-step flows (suggestion pipeline, search, editing, idempotent
+intake), see [docs/architecture.md](docs/architecture.md).
 
-- Auth is explicitly stubbed, not faked as real. app/deps.py reads org identity from an X-Org-Id header with a comment flagging that this is a stand-in for JWT/session auth — honest about what's a placeholder versus what's production-shaped.
+## Design decisions
 
-## Claims Feedback Loop System Design Diagram
-![Claims Feedback Loop System Design Diagram](diagrams/claims_feedback_loop.png)
+**Thin routers, logic in services.** Routers parse the request, call a
+service and shape the response. Prompt building, the LLM call, validation and
+fallback live in services and `agents/`, so they are testable without FastAPI.
 
-## Future Improvements
-- Real LLM call in suggestion_service.py, replacing the current rule-based stub — same function signature, so the router/API contract doesn't change.
-- Few-shot context from past overrides: query recent Feedback rows scoped to the same org (and similar claim status) and include them in the prompt, so the model learns from this org's specific correction history.
-- Structured-output validation: parse the LLM's response into a Pydantic model at the boundary (score/action bounds, required fields) instead of trusting raw JSON — LLM output treated like any other untrusted input.
-- Lightweight RAG over claim history notes: a lightweight first version, with a clear path to real chunking/embeddings/vector search once the pattern is proven.
-- Tests around tenant isolation and the state machine, so a future refactor can't silently reintroduce a cross-tenant leak.
+**Tenant isolation at the query level.** Every claim, adjuster, suggestion and
+feedback lookup filters by `org_id`, including inside the vector search SQL.
+It is not a check that one endpoint can forget.
+
+**An explicit state machine.** `open → under_review → approved/denied` uses a
+transition table. An invalid move returns `409`, not a silent no-op or a `500`.
+
+**The feedback loop is structural.** The schema requires `override_reason` on
+an override because that field is the training signal. It was designed around
+reuse, not added as a log table.
+
+**Separate concerns for the AI pieces.** Swapping the LLM provider touches
+only `llm_client.py`. Changing what counts as good few-shot context touches
+only `prompts.py`. Tightening validation touches only `parsers.py`. RAG lives
+in its own module because summarizing history is a different job from
+generating a decision.
+
+**Safe by default.** Claim text is treated as untrusted and screened for prompt
+injection. LLM citations are checked and bad ones removed. A reranker failure
+falls back to the original order. An indexing failure never fails an edit.
+
+**Concurrency handled in the database.** A unique index on
+`(org_id, external_ref)` lets one concurrent insert win while the others read
+and return that row.
+
+**Auth is an explicit stub.** `X-Org-Id` stands in for JWT or session auth,
+and the code says so. It marks what is a placeholder and what is
+production-shaped.
+
+## What I learned
+
+- **Feedback is data.** Designing the schema around reuse of human corrections
+  matters more than the model call itself.
+- **LLM output is untrusted input.** Validate, retry, then fall back, and
+  never let a malformed answer reach the database or the user.
+- **Hybrid retrieval beats either method alone.** Vector search matches
+  meaning, full text matches exact terms, and rank fusion combines them
+  without tuning score scales.
+- **Multi-tenancy belongs in the query.** Putting the tenant filter in the SQL
+  itself, and testing it, is safer than remembering it per endpoint.
+- **Idempotency needs the database.** A check-then-insert has a race. A unique
+  index plus re-reading on conflict does not.
+- **Stale AI advice is a real bug.** Marking suggestions stale on edit and
+  rejecting decisions on them prevents acting on outdated output.
+- **Evaluation keeps retrieval honest.** A small eval set (recall@3, recall@5,
+  MRR) shows which method actually helps.
+
+## Testing
+
+About 158 tests cover tenant isolation, the state machine, claim editing,
+audit history, idempotent intake, stats and queue, search, reranking, the
+investigator, prompt-injection handling and the feedback context. Postgres
+tests create their own database and skip when Postgres isn't reachable.
+
+## Honest limits
+
+- The default `stub` embedder hashes words, so it matches wording, not
+  meaning. Real quality needs Ollama embeddings.
+- I haven't recorded real retrieval numbers yet. The eval set is 30 synthetic
+  claims and 20 queries, so it shows method differences, not production accuracy.
+- On SQLite the app runs, but search returns a 503 because pgvector is needed.
+- The Docker setup is for development (hot reload, Vite dev server).
+
+## Next steps
+
+- Record retrieval eval results with Ollama embeddings.
+- Real authentication in place of the header stub.
+- A production Docker build: multi-stage, static frontend behind nginx.
+- Cursor pagination if `GET /claims` outgrows limit and offset.
+
+## Project layout
+
+- `backend/app/routers/`: thin HTTP layer
+- `backend/app/services/`: claim intake, editing, stats, review queue, audit, suggestions
+- `backend/app/agents/`: LLM client, prompts, parsers, ReAct investigator
+- `backend/app/rag/`: chunking, indexing, embeddings, hybrid search, rerank, retriever
+- `backend/migrations/`: Alembic migrations (pgvector, audit, external_ref)
+- `frontend/src/`: React UI (review queue, stats, claim detail, history, search)
+- `docs/architecture.md`: detailed flow diagrams
+- `docs/pgvector-notes.md`: notes on the Postgres side
